@@ -1,0 +1,124 @@
+package service
+
+import (
+	"fmt"
+	"time"
+
+	"matter-core/internal/model"
+	"matter-core/internal/repository"
+)
+
+type SchemaValidator struct {
+	mongoRepo *repository.MongoRepo
+}
+
+func NewSchemaValidator(mongoRepo *repository.MongoRepo) *SchemaValidator {
+	return &SchemaValidator{mongoRepo: mongoRepo}
+}
+
+func (v *SchemaValidator) ValidateEntry(schema model.Schema, data map[string]interface{}) error {
+	return v.validateFields(schema.Fields, data)
+}
+
+func (v *SchemaValidator) validateFields(fields []model.FieldSchema, data map[string]interface{}) error {
+	for _, field := range fields {
+		value, exists := data[field.Key]
+
+		if field.Required && !exists {
+			return fmt.Errorf("required field '%s' is missing", field.Key)
+		}
+
+		if !exists {
+			continue
+		}
+
+		if err := v.validateFieldType(field, value); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (v *SchemaValidator) validateFieldType(field model.FieldSchema, value interface{}) error {
+	if value == nil {
+		if field.Required {
+			return fmt.Errorf("field '%s' cannot be null", field.Key)
+		}
+		return nil
+	}
+
+	switch field.Type {
+	case model.TypeString:
+		if _, ok := value.(string); !ok {
+			return fmt.Errorf("field '%s' must be a string", field.Key)
+		}
+
+	case model.TypeNumber:
+		switch value.(type) {
+		case float64, float32, int, int32, int64:
+			// valid
+		default:
+			return fmt.Errorf("field '%s' must be a number", field.Key)
+		}
+
+	case model.TypeBool:
+		if _, ok := value.(bool); !ok {
+			return fmt.Errorf("field '%s' must be a boolean", field.Key)
+		}
+
+	case model.TypeDate:
+		switch v := value.(type) {
+		case string:
+			if _, err := time.Parse(time.RFC3339, v); err != nil {
+				return fmt.Errorf("field '%s' must be a valid date (RFC3339)", field.Key)
+			}
+		case time.Time:
+			// valid
+		default:
+			return fmt.Errorf("field '%s' must be a date", field.Key)
+		}
+
+	case model.TypeObject:
+		obj, ok := value.(map[string]interface{})
+		if !ok {
+			return fmt.Errorf("field '%s' must be an object", field.Key)
+		}
+		if len(field.Children) > 0 {
+			if err := v.validateFields(field.Children, obj); err != nil {
+				return err
+			}
+		}
+
+	case model.TypeArray:
+		arr, ok := value.([]interface{})
+		if !ok {
+			return fmt.Errorf("field '%s' must be an array", field.Key)
+		}
+		if field.ItemType != nil {
+			for i, item := range arr {
+				if err := v.validateFieldType(*field.ItemType, item); err != nil {
+					return fmt.Errorf("field '%s[%d]': %w", field.Key, i, err)
+				}
+			}
+		}
+
+	case model.TypeTaxonomy:
+		if field.AllowMultiple {
+			arr, ok := value.([]interface{})
+			if !ok {
+				return fmt.Errorf("field '%s' must be an array of term IDs", field.Key)
+			}
+			for _, item := range arr {
+				if _, ok := item.(string); !ok {
+					return fmt.Errorf("field '%s' must contain string term IDs", field.Key)
+				}
+			}
+		} else {
+			if _, ok := value.(string); !ok {
+				return fmt.Errorf("field '%s' must be a term ID string", field.Key)
+			}
+		}
+	}
+
+	return nil
+}

@@ -106,6 +106,7 @@ type SocialBind struct {
 	ProviderUserID string `bson:"provider_user_id" json:"provider_user_id"`
 	Name           string `bson:"name" json:"name"`
 	Email          string `bson:"email" json:"email"`
+	Avatar         string `bson:"avatar" json:"avatar"`
 }
 
 type User struct {
@@ -116,6 +117,16 @@ type User struct {
 	Email     string             `bson:"email" json:"email"`
 	Socials   []SocialBind       `bson:"socials" json:"socials"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+}
+
+// --- 6. Session ---
+type Session struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	Token     string             `bson:"token" json:"token"`
+	UserID    primitive.ObjectID `bson:"user_id" json:"user_id"`
+	Role      string             `bson:"role" json:"role"`
+	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+	ExpiresAt time.Time          `bson:"expires_at" json:"expires_at"`
 }
 
 // --- Search Document for Meilisearch ---

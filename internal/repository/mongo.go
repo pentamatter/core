@@ -20,6 +20,7 @@ type MongoRepo struct {
 	taxonomy *mongo.Collection
 	terms    *mongo.Collection
 	comments *mongo.Collection
+	sessions *mongo.Collection
 }
 
 func NewMongoRepo(uri, dbName string) (*MongoRepo, error) {
@@ -45,6 +46,7 @@ func NewMongoRepo(uri, dbName string) (*MongoRepo, error) {
 		taxonomy: db.Collection("taxonomies"),
 		terms:    db.Collection("terms"),
 		comments: db.Collection("comments"),
+		sessions: db.Collection("sessions"),
 	}
 
 	if err := repo.ensureIndexes(ctx); err != nil {
@@ -103,6 +105,15 @@ func (r *MongoRepo) ensureIndexes(ctx context.Context) error {
 	_, err = r.comments.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "entry_id", Value: 1}}},
 		{Keys: bson.D{{Key: "root_id", Value: 1}}},
+	})
+	if err != nil {
+		return err
+	}
+
+	// Session indexes
+	_, err = r.sessions.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "token", Value: 1}}, Options: options.Index().SetUnique(true)},
+		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
 	})
 	return err
 }
@@ -360,5 +371,38 @@ func (r *MongoRepo) GetCommentsByEntry(ctx context.Context, entryID primitive.Ob
 
 func (r *MongoRepo) DeleteComment(ctx context.Context, id primitive.ObjectID) error {
 	_, err := r.comments.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
+// --- Session Operations ---
+func (r *MongoRepo) CreateSession(ctx context.Context, session *model.Session) error {
+	session.CreatedAt = time.Now()
+	result, err := r.sessions.InsertOne(ctx, session)
+	if err != nil {
+		return err
+	}
+	session.ID = result.InsertedID.(primitive.ObjectID)
+	return nil
+}
+
+func (r *MongoRepo) GetSessionByToken(ctx context.Context, token string) (*model.Session, error) {
+	var session model.Session
+	err := r.sessions.FindOne(ctx, bson.M{
+		"token":      token,
+		"expires_at": bson.M{"$gt": time.Now()},
+	}).Decode(&session)
+	if err != nil {
+		return nil, err
+	}
+	return &session, nil
+}
+
+func (r *MongoRepo) DeleteSession(ctx context.Context, token string) error {
+	_, err := r.sessions.DeleteOne(ctx, bson.M{"token": token})
+	return err
+}
+
+func (r *MongoRepo) DeleteExpiredSessions(ctx context.Context) error {
+	_, err := r.sessions.DeleteMany(ctx, bson.M{"expires_at": bson.M{"$lt": time.Now()}})
 	return err
 }

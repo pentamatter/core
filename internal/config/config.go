@@ -12,7 +12,6 @@ type Config struct {
 	MongoDB         string
 	MeilisearchHost string
 	MeilisearchKey  string
-	JWTSecret       string
 	AdminEmail      string
 
 	GitHubClientID     string
@@ -20,6 +19,9 @@ type Config struct {
 	GoogleClientID     string
 	GoogleClientSecret string
 	OAuthRedirectURL   string
+
+	FrontendURL  string
+	SecureCookie bool
 }
 
 var AppConfig *Config
@@ -33,13 +35,14 @@ func Load() *Config {
 		MongoDB:            getEnv("MONGO_DB", "matter_core"),
 		MeilisearchHost:    getEnv("MEILISEARCH_HOST", "http://localhost:7700"),
 		MeilisearchKey:     getEnv("MEILISEARCH_KEY", ""),
-		JWTSecret:          getEnv("JWT_SECRET", "your-secret-key"),
 		AdminEmail:         getEnv("ADMIN_EMAIL", ""),
 		GitHubClientID:     getEnv("GITHUB_CLIENT_ID", ""),
 		GitHubClientSecret: getEnv("GITHUB_CLIENT_SECRET", ""),
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
 		OAuthRedirectURL:   getEnv("OAUTH_REDIRECT_URL", "http://localhost:8080/api/v1/auth/callback"),
+		FrontendURL:        getEnv("FRONTEND_URL", "http://localhost:3000"),
+		SecureCookie:       getEnv("SECURE_COOKIE", "false") == "true",
 	}
 	return AppConfig
 }

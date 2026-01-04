@@ -46,11 +46,12 @@ func main() {
 		syncSvc = service.NewSyncService(meiliRepo)
 	}
 	authService := service.NewAuthService(mongoRepo, cfg)
+	sessionStore := service.NewSessionStore(mongoRepo)
 
 	// Initialize handlers
 	schemaHandler := handler.NewSchemaHandler(mongoRepo)
 	entryHandler := handler.NewEntryHandler(mongoRepo, meiliRepo, validator, syncSvc)
-	authHandler := handler.NewAuthHandler(authService)
+	authHandler := handler.NewAuthHandler(authService, sessionStore, cfg)
 	taxonomyHandler := handler.NewTaxonomyHandler(mongoRepo)
 	termHandler := handler.NewTermHandler(mongoRepo)
 	commentHandler := handler.NewCommentHandler(mongoRepo)
@@ -61,16 +62,18 @@ func main() {
 	// API routes
 	v1 := r.Group("/api/v1")
 	{
-		// Auth routes (public)
+		// Auth routes
 		auth := v1.Group("/auth")
 		{
-			auth.GET("/login/:provider", authHandler.Login)
+			auth.GET("/signin/:provider", authHandler.SignIn)
 			auth.GET("/callback/:provider", authHandler.Callback)
+			auth.GET("/session", handler.OptionalAuthMiddleware(sessionStore), authHandler.Session)
+			auth.POST("/signout", authHandler.SignOut)
 		}
 
 		// Schema routes (admin only)
 		schemas := v1.Group("/schemas")
-		schemas.Use(handler.AuthMiddleware(authService), handler.AdminMiddleware())
+		schemas.Use(handler.AuthMiddleware(sessionStore), handler.AdminMiddleware())
 		{
 			schemas.POST("", schemaHandler.Create)
 			schemas.GET("", schemaHandler.List)
@@ -80,19 +83,19 @@ func main() {
 		// Entry routes
 		entries := v1.Group("/entries")
 		{
-			entries.GET("", handler.OptionalAuthMiddleware(authService), entryHandler.List)
-			entries.GET("/:id", handler.OptionalAuthMiddleware(authService), entryHandler.Get)
-			entries.POST("", handler.AuthMiddleware(authService), entryHandler.Create)
-			entries.PUT("/:id", handler.AuthMiddleware(authService), entryHandler.Update)
-			entries.DELETE("/:id", handler.AuthMiddleware(authService), entryHandler.Delete)
+			entries.GET("", handler.OptionalAuthMiddleware(sessionStore), entryHandler.List)
+			entries.GET("/:id", handler.OptionalAuthMiddleware(sessionStore), entryHandler.Get)
+			entries.POST("", handler.AuthMiddleware(sessionStore), entryHandler.Create)
+			entries.PUT("/:id", handler.AuthMiddleware(sessionStore), entryHandler.Update)
+			entries.DELETE("/:id", handler.AuthMiddleware(sessionStore), entryHandler.Delete)
 		}
 
-		// Taxonomy routes (admin only for create)
+		// Taxonomy routes
 		taxonomies := v1.Group("/taxonomies")
 		{
 			taxonomies.GET("", taxonomyHandler.List)
 			taxonomies.GET("/:key", taxonomyHandler.Get)
-			taxonomies.POST("", handler.AuthMiddleware(authService), handler.AdminMiddleware(), taxonomyHandler.Create)
+			taxonomies.POST("", handler.AuthMiddleware(sessionStore), handler.AdminMiddleware(), taxonomyHandler.Create)
 		}
 
 		// Term routes
@@ -100,19 +103,16 @@ func main() {
 		{
 			terms.GET("/taxonomy/:key", termHandler.ListByTaxonomy)
 			terms.GET("/:id", termHandler.Get)
-			terms.POST("", handler.AuthMiddleware(authService), handler.AdminMiddleware(), termHandler.Create)
+			terms.POST("", handler.AuthMiddleware(sessionStore), handler.AdminMiddleware(), termHandler.Create)
 		}
 
 		// Comment routes
 		comments := v1.Group("/comments")
 		{
 			comments.GET("/entry/:entry_id", commentHandler.ListByEntry)
-			comments.POST("", handler.AuthMiddleware(authService), commentHandler.Create)
-			comments.DELETE("/:id", handler.AuthMiddleware(authService), commentHandler.Delete)
+			comments.POST("", handler.AuthMiddleware(sessionStore), commentHandler.Create)
+			comments.DELETE("/:id", handler.AuthMiddleware(sessionStore), commentHandler.Delete)
 		}
-
-		// User profile
-		v1.GET("/me", handler.AuthMiddleware(authService), authHandler.Me)
 	}
 
 	// Graceful shutdown

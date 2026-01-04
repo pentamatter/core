@@ -1,39 +1,30 @@
 package handler
 
 import (
-	"strings"
-
 	"matter-core/internal/service"
 	"matter-core/pkg/utils"
 
 	"github.com/gin-gonic/gin"
 )
 
-func AuthMiddleware(authService *service.AuthService) gin.HandlerFunc {
+func AuthMiddleware(sessionStore *service.SessionStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
-			utils.Unauthorized(c, "missing authorization header")
-			c.Abort()
-			return
-		}
-
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) != 2 || parts[0] != "Bearer" {
-			utils.Unauthorized(c, "invalid authorization header format")
-			c.Abort()
-			return
-		}
-
-		claims, err := authService.ValidateJWT(parts[1])
+		token, err := c.Cookie(SessionCookieName)
 		if err != nil {
-			utils.Unauthorized(c, "invalid token")
+			utils.Unauthorized(c, "not authenticated")
 			c.Abort()
 			return
 		}
 
-		c.Set("user_id", claims.UserID)
-		c.Set("user_role", claims.Role)
+		session, valid := sessionStore.IsValid(c.Request.Context(), token)
+		if !valid {
+			utils.Unauthorized(c, "session expired")
+			c.Abort()
+			return
+		}
+
+		c.Set("user_id", session.UserID.Hex())
+		c.Set("user_role", session.Role)
 		c.Next()
 	}
 }
@@ -50,20 +41,18 @@ func AdminMiddleware() gin.HandlerFunc {
 	}
 }
 
-func OptionalAuthMiddleware(authService *service.AuthService) gin.HandlerFunc {
+func OptionalAuthMiddleware(sessionStore *service.SessionStore) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		authHeader := c.GetHeader("Authorization")
-		if authHeader == "" {
+		token, err := c.Cookie(SessionCookieName)
+		if err != nil {
 			c.Next()
 			return
 		}
 
-		parts := strings.SplitN(authHeader, " ", 2)
-		if len(parts) == 2 && parts[0] == "Bearer" {
-			if claims, err := authService.ValidateJWT(parts[1]); err == nil {
-				c.Set("user_id", claims.UserID)
-				c.Set("user_role", claims.Role)
-			}
+		session, valid := sessionStore.IsValid(c.Request.Context(), token)
+		if valid {
+			c.Set("user_id", session.UserID.Hex())
+			c.Set("user_role", session.Role)
 		}
 		c.Next()
 	}

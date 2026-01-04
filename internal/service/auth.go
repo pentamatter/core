@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"time"
 
 	"matter-core/internal/config"
 	"matter-core/internal/model"
 	"matter-core/internal/repository"
 
-	"github.com/golang-jwt/jwt/v4"
 	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.mongodb.org/mongo-driver/mongo"
 	"golang.org/x/oauth2"
@@ -72,7 +70,7 @@ func (s *AuthService) GetAuthURL(provider string) (string, error) {
 	}
 }
 
-func (s *AuthService) HandleCallback(ctx context.Context, provider, code string) (*model.User, string, error) {
+func (s *AuthService) HandleCallback(ctx context.Context, provider, code string) (*model.User, error) {
 	var socialBind model.SocialBind
 	var err error
 
@@ -82,11 +80,11 @@ func (s *AuthService) HandleCallback(ctx context.Context, provider, code string)
 	case "google":
 		socialBind, err = s.handleGoogleCallback(ctx, code)
 	default:
-		return nil, "", errors.New("unsupported provider")
+		return nil, errors.New("unsupported provider")
 	}
 
 	if err != nil {
-		return nil, "", err
+		return nil, err
 	}
 
 	user, err := s.mongoRepo.GetUserBySocial(ctx, socialBind.Provider, socialBind.ProviderUserID)
@@ -101,22 +99,18 @@ func (s *AuthService) HandleCallback(ctx context.Context, provider, code string)
 				Role:     role,
 				Nickname: socialBind.Name,
 				Email:    socialBind.Email,
+				Avatar:   socialBind.Avatar,
 				Socials:  []model.SocialBind{socialBind},
 			}
 			if err := s.mongoRepo.CreateUser(ctx, user); err != nil {
-				return nil, "", err
+				return nil, err
 			}
 		} else {
-			return nil, "", err
+			return nil, err
 		}
 	}
 
-	token, err := s.GenerateJWT(user)
-	if err != nil {
-		return nil, "", err
-	}
-
-	return user, token, nil
+	return user, nil
 }
 
 func (s *AuthService) handleGitHubCallback(ctx context.Context, code string) (model.SocialBind, error) {
@@ -133,9 +127,10 @@ func (s *AuthService) handleGitHubCallback(ctx context.Context, code string) (mo
 	defer resp.Body.Close()
 
 	var ghUser struct {
-		ID    int    `json:"id"`
-		Login string `json:"login"`
-		Email string `json:"email"`
+		ID        int    `json:"id"`
+		Login     string `json:"login"`
+		Email     string `json:"email"`
+		AvatarURL string `json:"avatar_url"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&ghUser); err != nil {
 		return model.SocialBind{}, err
@@ -165,6 +160,7 @@ func (s *AuthService) handleGitHubCallback(ctx context.Context, code string) (mo
 		ProviderUserID: fmt.Sprintf("%d", ghUser.ID),
 		Name:           ghUser.Login,
 		Email:          ghUser.Email,
+		Avatar:         ghUser.AvatarURL,
 	}, nil
 }
 
@@ -182,9 +178,10 @@ func (s *AuthService) handleGoogleCallback(ctx context.Context, code string) (mo
 	defer resp.Body.Close()
 
 	var googleUser struct {
-		ID    string `json:"id"`
-		Name  string `json:"name"`
-		Email string `json:"email"`
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Email   string `json:"email"`
+		Picture string `json:"picture"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&googleUser); err != nil {
 		return model.SocialBind{}, err
@@ -195,41 +192,8 @@ func (s *AuthService) handleGoogleCallback(ctx context.Context, code string) (mo
 		ProviderUserID: googleUser.ID,
 		Name:           googleUser.Name,
 		Email:          googleUser.Email,
+		Avatar:         googleUser.Picture,
 	}, nil
-}
-
-type JWTClaims struct {
-	UserID string `json:"user_id"`
-	Role   string `json:"role"`
-	jwt.RegisteredClaims
-}
-
-func (s *AuthService) GenerateJWT(user *model.User) (string, error) {
-	claims := JWTClaims{
-		UserID: user.ID.Hex(),
-		Role:   user.Role,
-		RegisteredClaims: jwt.RegisteredClaims{
-			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * 7 * time.Hour)),
-			IssuedAt:  jwt.NewNumericDate(time.Now()),
-		},
-	}
-
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	return token.SignedString([]byte(s.cfg.JWTSecret))
-}
-
-func (s *AuthService) ValidateJWT(tokenString string) (*JWTClaims, error) {
-	token, err := jwt.ParseWithClaims(tokenString, &JWTClaims{}, func(token *jwt.Token) (interface{}, error) {
-		return []byte(s.cfg.JWTSecret), nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	if claims, ok := token.Claims.(*JWTClaims); ok && token.Valid {
-		return claims, nil
-	}
-	return nil, errors.New("invalid token")
 }
 
 func (s *AuthService) GetUserByID(ctx context.Context, userID string) (*model.User, error) {

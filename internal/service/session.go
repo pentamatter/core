@@ -10,7 +10,6 @@ import (
 	"matter-core/internal/repository"
 
 	"go.mongodb.org/mongo-driver/bson/primitive"
-	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type SessionStore struct {
@@ -22,7 +21,10 @@ func NewSessionStore(mongoRepo *repository.MongoRepo) *SessionStore {
 }
 
 func (s *SessionStore) Create(ctx context.Context, userID primitive.ObjectID, role string, duration time.Duration) (string, error) {
-	token := generateToken(32)
+	token, err := generateToken(32)
+	if err != nil {
+		return "", err
+	}
 
 	session := &model.Session{
 		Token:     token,
@@ -48,16 +50,19 @@ func (s *SessionStore) Delete(ctx context.Context, token string) error {
 func (s *SessionStore) IsValid(ctx context.Context, token string) (*model.Session, bool) {
 	session, err := s.Get(ctx, token)
 	if err != nil {
-		if err == mongo.ErrNoDocuments {
-			return nil, false
-		}
+		return nil, false
+	}
+	// Explicit expiration check (MongoDB TTL may have delay)
+	if time.Now().After(session.ExpiresAt) {
 		return nil, false
 	}
 	return session, true
 }
 
-func generateToken(length int) string {
+func generateToken(length int) (string, error) {
 	b := make([]byte, length)
-	rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
 }

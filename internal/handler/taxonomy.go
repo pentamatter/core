@@ -21,8 +21,8 @@ func NewTaxonomyHandler(mongoRepo *repository.MongoRepo) *TaxonomyHandler {
 }
 
 type CreateTaxonomyRequest struct {
-	Key            string `json:"key" binding:"required"`
-	Name           string `json:"name" binding:"required"`
+	Key            string `json:"key" binding:"required,max=50,alphanum"`
+	Name           string `json:"name" binding:"required,max=100"`
 	IsHierarchical bool   `json:"is_hierarchical"`
 }
 
@@ -84,4 +84,76 @@ func (h *TaxonomyHandler) Get(c *gin.Context) {
 	}
 
 	utils.Success(c, tax)
+}
+
+type UpdateTaxonomyRequest struct {
+	Name           string `json:"name" binding:"required,max=100"`
+	IsHierarchical *bool  `json:"is_hierarchical"`
+}
+
+func (h *TaxonomyHandler) Update(c *gin.Context) {
+	key := c.Param("key")
+
+	var req UpdateTaxonomyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	tax, err := h.mongoRepo.GetTaxonomyByKey(ctx, key)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			utils.NotFound(c, "taxonomy not found")
+			return
+		}
+		utils.InternalError(c, "failed to get taxonomy")
+		return
+	}
+
+	tax.Name = req.Name
+	if req.IsHierarchical != nil {
+		tax.IsHierarchical = *req.IsHierarchical
+	}
+
+	if err := h.mongoRepo.UpdateTaxonomy(ctx, tax); err != nil {
+		utils.InternalError(c, "failed to update taxonomy")
+		return
+	}
+
+	utils.Success(c, tax)
+}
+
+func (h *TaxonomyHandler) Delete(c *gin.Context) {
+	key := c.Param("key")
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	// Check if taxonomy exists
+	_, err := h.mongoRepo.GetTaxonomyByKey(ctx, key)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			utils.NotFound(c, "taxonomy not found")
+			return
+		}
+		utils.InternalError(c, "failed to get taxonomy")
+		return
+	}
+
+	// Delete all terms under this taxonomy
+	if err := h.mongoRepo.DeleteTermsByTaxonomy(ctx, key); err != nil {
+		utils.InternalError(c, "failed to delete terms")
+		return
+	}
+
+	// Delete taxonomy
+	if err := h.mongoRepo.DeleteTaxonomy(ctx, key); err != nil {
+		utils.InternalError(c, "failed to delete taxonomy")
+		return
+	}
+
+	utils.Success(c, nil)
 }

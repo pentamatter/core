@@ -21,8 +21,8 @@ func NewSchemaHandler(mongoRepo *repository.MongoRepo) *SchemaHandler {
 }
 
 type CreateSchemaRequest struct {
-	Key    string              `json:"key" binding:"required"`
-	Name   string              `json:"name" binding:"required"`
+	Key    string              `json:"key" binding:"required,max=50,alphanum"`
+	Name   string              `json:"name" binding:"required,max=100"`
 	Fields []model.FieldSchema `json:"fields" binding:"required"`
 }
 
@@ -92,4 +92,30 @@ func (h *SchemaHandler) List(c *gin.Context) {
 	}
 
 	utils.Success(c, schemas)
+}
+
+func (h *SchemaHandler) Delete(c *gin.Context) {
+	key := c.Param("key")
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	// Check if schema exists
+	_, err := h.mongoRepo.GetLatestSchema(ctx, key)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			utils.NotFound(c, "schema not found")
+			return
+		}
+		utils.InternalError(c, "failed to get schema")
+		return
+	}
+
+	// Delete all versions of this schema
+	if err := h.mongoRepo.DeleteSchemasByKey(ctx, key); err != nil {
+		utils.InternalError(c, "failed to delete schema")
+		return
+	}
+
+	utils.Success(c, nil)
 }

@@ -7,12 +7,26 @@ import (
 )
 
 type Response struct {
-	Code    int         `json:"code"`
-	Message string      `json:"message"`
-	Data    interface{} `json:"data,omitempty"`
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+	Data    any    `json:"data,omitempty"`
 }
 
-func Success(c *gin.Context, data interface{}) {
+type PaginatedResponse struct {
+	Code    int            `json:"code"`
+	Message string         `json:"message"`
+	Data    any            `json:"data,omitempty"`
+	Meta    PaginationMeta `json:"meta"`
+}
+
+type PaginationMeta struct {
+	Total   int64 `json:"total"`
+	Limit   int64 `json:"limit"`
+	Offset  int64 `json:"offset"`
+	HasMore bool  `json:"has_more"`
+}
+
+func Success(c *gin.Context, data any) {
 	c.JSON(http.StatusOK, Response{
 		Code:    0,
 		Message: "success",
@@ -20,7 +34,21 @@ func Success(c *gin.Context, data interface{}) {
 	})
 }
 
-func Created(c *gin.Context, data interface{}) {
+func SuccessWithPagination(c *gin.Context, data any, total, limit, offset int64) {
+	c.JSON(http.StatusOK, PaginatedResponse{
+		Code:    0,
+		Message: "success",
+		Data:    data,
+		Meta: PaginationMeta{
+			Total:   total,
+			Limit:   limit,
+			Offset:  offset,
+			HasMore: offset+limit < total,
+		},
+	})
+}
+
+func Created(c *gin.Context, data any) {
 	c.JSON(http.StatusCreated, Response{
 		Code:    0,
 		Message: "created",

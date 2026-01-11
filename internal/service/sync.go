@@ -38,7 +38,7 @@ func (s *SyncService) entryToSearchDoc(entry *model.Entry) model.SearchDocument 
 	}
 }
 
-func (s *SyncService) extractTextFromAttributes(attrs map[string]interface{}) string {
+func (s *SyncService) extractTextFromAttributes(attrs map[string]any) string {
 	var texts []string
 	for _, v := range attrs {
 		texts = append(texts, extractStrings(v)...)
@@ -46,16 +46,16 @@ func (s *SyncService) extractTextFromAttributes(attrs map[string]interface{}) st
 	return strings.Join(texts, " ")
 }
 
-func extractStrings(v interface{}) []string {
+func extractStrings(v any) []string {
 	var result []string
 	switch val := v.(type) {
 	case string:
 		result = append(result, val)
-	case []interface{}:
+	case []any:
 		for _, item := range val {
 			result = append(result, extractStrings(item)...)
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		for _, item := range val {
 			result = append(result, extractStrings(item)...)
 		}

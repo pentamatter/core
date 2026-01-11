@@ -2,6 +2,7 @@ package repository
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"matter-core/internal/model"
 
@@ -50,19 +51,20 @@ func (r *MeiliRepo) DeleteDocument(id string) error {
 	return err
 }
 
-func (r *MeiliRepo) Search(query string, schemaKey string, limit, offset int64) ([]string, error) {
+func (r *MeiliRepo) Search(query string, schemaKey string, limit, offset int64) ([]string, int64, error) {
 	searchReq := &meilisearch.SearchRequest{
 		Limit:  limit,
 		Offset: offset,
 	}
 
 	if schemaKey != "" {
-		searchReq.Filter = "schema_key = " + schemaKey
+		// Properly quote the filter value
+		searchReq.Filter = fmt.Sprintf("schema_key = \"%s\"", schemaKey)
 	}
 
 	result, err := r.index.Search(query, searchReq)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	ids := make([]string, 0, len(result.Hits))
@@ -74,5 +76,5 @@ func (r *MeiliRepo) Search(query string, schemaKey string, limit, offset int64) 
 			}
 		}
 	}
-	return ids, nil
+	return ids, result.EstimatedTotalHits, nil
 }

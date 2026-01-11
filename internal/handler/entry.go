@@ -37,10 +37,10 @@ func NewEntryHandler(
 }
 
 type CreateEntryRequest struct {
-	SchemaKey  string                 `json:"schema_key" binding:"required"`
-	Title      string                 `json:"title" binding:"required"`
-	Body       string                 `json:"body"`
-	Attributes map[string]interface{} `json:"attributes"`
+	SchemaKey  string         `json:"schema_key" binding:"required"`
+	Title      string         `json:"title" binding:"required,max=200"`
+	Body       string         `json:"body" binding:"max=100000"`
+	Attributes map[string]any `json:"attributes"`
 }
 
 func (h *EntryHandler) Create(c *gin.Context) {
@@ -93,16 +93,23 @@ func (h *EntryHandler) Create(c *gin.Context) {
 
 	// Async sync to Meilisearch
 	go func() {
-		_ = h.syncSvc.SyncEntry(entry)
+		defer func() {
+			if r := recover(); r != nil {
+				// Log panic but don't crash - search sync is non-critical
+			}
+		}()
+		if h.syncSvc != nil {
+			_ = h.syncSvc.SyncEntry(entry)
+		}
 	}()
 
 	utils.Created(c, entry)
 }
 
 type UpdateEntryRequest struct {
-	Title      string                 `json:"title"`
-	Body       string                 `json:"body"`
-	Attributes map[string]interface{} `json:"attributes"`
+	Title      string         `json:"title" binding:"max=200"`
+	Body       string         `json:"body" binding:"max=100000"`
+	Attributes map[string]any `json:"attributes"`
 }
 
 func (h *EntryHandler) Update(c *gin.Context) {
@@ -165,7 +172,14 @@ func (h *EntryHandler) Update(c *gin.Context) {
 	}
 
 	go func() {
-		_ = h.syncSvc.SyncEntry(entry)
+		defer func() {
+			if r := recover(); r != nil {
+				// Log panic but don't crash
+			}
+		}()
+		if h.syncSvc != nil {
+			_ = h.syncSvc.SyncEntry(entry)
+		}
 	}()
 
 	utils.Success(c, entry)
@@ -205,7 +219,14 @@ func (h *EntryHandler) Delete(c *gin.Context) {
 	}
 
 	go func() {
-		_ = h.syncSvc.DeleteEntry(id)
+		defer func() {
+			if r := recover(); r != nil {
+				// Log panic but don't crash
+			}
+		}()
+		if h.syncSvc != nil {
+			_ = h.syncSvc.DeleteEntry(id)
+		}
 	}()
 
 	utils.Success(c, nil)
@@ -252,14 +273,16 @@ func (h *EntryHandler) List(c *gin.Context) {
 	defer cancel()
 
 	var entries []model.Entry
+	var total int64
 
 	if query != "" && h.meiliRepo != nil {
 		// Search via Meilisearch
-		ids, err := h.meiliRepo.Search(query, schemaKey, limit, offset)
+		ids, searchTotal, err := h.meiliRepo.Search(query, schemaKey, limit, offset)
 		if err != nil {
 			utils.InternalError(c, "search failed")
 			return
 		}
+		total = searchTotal
 
 		if len(ids) > 0 {
 			oids := make([]primitive.ObjectID, 0, len(ids))
@@ -273,6 +296,8 @@ func (h *EntryHandler) List(c *gin.Context) {
 				utils.InternalError(c, "failed to get entries")
 				return
 			}
+		} else {
+			entries = []model.Entry{}
 		}
 	} else {
 		// Direct MongoDB query
@@ -282,7 +307,17 @@ func (h *EntryHandler) List(c *gin.Context) {
 			utils.InternalError(c, "failed to list entries")
 			return
 		}
+		total, err = h.mongoRepo.CountEntries(ctx, schemaKey)
+		if err != nil {
+			utils.InternalError(c, "failed to count entries")
+			return
+		}
 	}
 
-	utils.Success(c, entries)
+	// Always return array, never nil
+	if entries == nil {
+		entries = []model.Entry{}
+	}
+
+	utils.SuccessWithPagination(c, entries, total, limit, offset)
 }

@@ -59,6 +59,11 @@ func main() {
 	// Setup Gin router
 	r := gin.Default()
 
+	// Health check endpoint
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(200, gin.H{"status": "ok"})
+	})
+
 	// API routes
 	v1 := r.Group("/api/v1")
 	{
@@ -78,6 +83,7 @@ func main() {
 			schemas.POST("", schemaHandler.Create)
 			schemas.GET("", schemaHandler.List)
 			schemas.GET("/:key", schemaHandler.Get)
+			schemas.DELETE("/:key", schemaHandler.Delete)
 		}
 
 		// Entry routes
@@ -96,6 +102,8 @@ func main() {
 			taxonomies.GET("", taxonomyHandler.List)
 			taxonomies.GET("/:key", taxonomyHandler.Get)
 			taxonomies.POST("", handler.AuthMiddleware(sessionStore), handler.AdminMiddleware(), taxonomyHandler.Create)
+			taxonomies.PUT("/:key", handler.AuthMiddleware(sessionStore), handler.AdminMiddleware(), taxonomyHandler.Update)
+			taxonomies.DELETE("/:key", handler.AuthMiddleware(sessionStore), handler.AdminMiddleware(), taxonomyHandler.Delete)
 		}
 
 		// Term routes
@@ -104,6 +112,8 @@ func main() {
 			terms.GET("/taxonomy/:key", termHandler.ListByTaxonomy)
 			terms.GET("/:id", termHandler.Get)
 			terms.POST("", handler.AuthMiddleware(sessionStore), handler.AdminMiddleware(), termHandler.Create)
+			terms.PUT("/:id", handler.AuthMiddleware(sessionStore), handler.AdminMiddleware(), termHandler.Update)
+			terms.DELETE("/:id", handler.AuthMiddleware(sessionStore), handler.AdminMiddleware(), termHandler.Delete)
 		}
 
 		// Comment routes

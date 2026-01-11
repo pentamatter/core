@@ -152,6 +152,11 @@ func (r *MongoRepo) GetSchemaByID(ctx context.Context, id primitive.ObjectID) (*
 	return &schema, nil
 }
 
+func (r *MongoRepo) DeleteSchemasByKey(ctx context.Context, key string) error {
+	_, err := r.schemas.DeleteMany(ctx, bson.M{"key": key})
+	return err
+}
+
 func (r *MongoRepo) ListSchemas(ctx context.Context) ([]model.Schema, error) {
 	pipeline := mongo.Pipeline{
 		{{Key: "$sort", Value: bson.D{{Key: "version", Value: -1}}}},
@@ -221,6 +226,14 @@ func (r *MongoRepo) ListEntries(ctx context.Context, schemaKey string, limit, of
 	return entries, nil
 }
 
+func (r *MongoRepo) CountEntries(ctx context.Context, schemaKey string) (int64, error) {
+	filter := bson.M{}
+	if schemaKey != "" {
+		filter["schema_key"] = schemaKey
+	}
+	return r.entries.CountDocuments(ctx, filter)
+}
+
 func (r *MongoRepo) GetEntriesByIDs(ctx context.Context, ids []primitive.ObjectID) ([]model.Entry, error) {
 	cursor, err := r.entries.Find(ctx, bson.M{"_id": bson.M{"$in": ids}})
 	if err != nil {
@@ -230,7 +243,19 @@ func (r *MongoRepo) GetEntriesByIDs(ctx context.Context, ids []primitive.ObjectI
 	if err := cursor.All(ctx, &entries); err != nil {
 		return nil, err
 	}
-	return entries, nil
+
+	// Preserve order from input IDs (important for search relevance)
+	idToEntry := make(map[primitive.ObjectID]model.Entry, len(entries))
+	for _, e := range entries {
+		idToEntry[e.ID] = e
+	}
+	ordered := make([]model.Entry, 0, len(ids))
+	for _, id := range ids {
+		if e, ok := idToEntry[id]; ok {
+			ordered = append(ordered, e)
+		}
+	}
+	return ordered, nil
 }
 
 // --- User Operations ---
@@ -306,6 +331,16 @@ func (r *MongoRepo) ListTaxonomies(ctx context.Context) ([]model.Taxonomy, error
 	return taxonomies, nil
 }
 
+func (r *MongoRepo) UpdateTaxonomy(ctx context.Context, tax *model.Taxonomy) error {
+	_, err := r.taxonomy.ReplaceOne(ctx, bson.M{"_id": tax.ID}, tax)
+	return err
+}
+
+func (r *MongoRepo) DeleteTaxonomy(ctx context.Context, key string) error {
+	_, err := r.taxonomy.DeleteOne(ctx, bson.M{"key": key})
+	return err
+}
+
 // --- Term Operations ---
 func (r *MongoRepo) CreateTerm(ctx context.Context, term *model.Term) error {
 	result, err := r.terms.InsertOne(ctx, term)
@@ -346,6 +381,21 @@ func (r *MongoRepo) GetTermBySlug(ctx context.Context, taxonomyKey, slug string)
 	return &term, nil
 }
 
+func (r *MongoRepo) UpdateTerm(ctx context.Context, term *model.Term) error {
+	_, err := r.terms.ReplaceOne(ctx, bson.M{"_id": term.ID}, term)
+	return err
+}
+
+func (r *MongoRepo) DeleteTerm(ctx context.Context, id primitive.ObjectID) error {
+	_, err := r.terms.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
+func (r *MongoRepo) DeleteTermsByTaxonomy(ctx context.Context, taxonomyKey string) error {
+	_, err := r.terms.DeleteMany(ctx, bson.M{"taxonomy_key": taxonomyKey})
+	return err
+}
+
 // --- Comment Operations ---
 func (r *MongoRepo) CreateComment(ctx context.Context, comment *model.Comment) error {
 	comment.CreatedAt = time.Now()
@@ -355,6 +405,15 @@ func (r *MongoRepo) CreateComment(ctx context.Context, comment *model.Comment) e
 	}
 	comment.ID = result.InsertedID.(primitive.ObjectID)
 	return nil
+}
+
+func (r *MongoRepo) GetCommentByID(ctx context.Context, id primitive.ObjectID) (*model.Comment, error) {
+	var comment model.Comment
+	err := r.comments.FindOne(ctx, bson.M{"_id": id}).Decode(&comment)
+	if err != nil {
+		return nil, err
+	}
+	return &comment, nil
 }
 
 func (r *MongoRepo) GetCommentsByEntry(ctx context.Context, entryID primitive.ObjectID) ([]model.Comment, error) {

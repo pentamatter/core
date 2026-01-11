@@ -23,7 +23,7 @@ func NewCommentHandler(mongoRepo *repository.MongoRepo) *CommentHandler {
 
 type CreateCommentRequest struct {
 	EntryID    string `json:"entry_id" binding:"required"`
-	Content    string `json:"content" binding:"required"`
+	Content    string `json:"content" binding:"required,min=1,max=5000"`
 	ParentID   string `json:"parent_id"`
 	ReplyToUID string `json:"reply_to_uid"`
 }
@@ -71,9 +71,25 @@ func (h *CommentHandler) Create(c *gin.Context) {
 			utils.BadRequest(c, "invalid parent_id")
 			return
 		}
+
+		// Get parent comment to determine root_id
+		parentComment, err := h.mongoRepo.GetCommentByID(ctx, parentOID)
+		if err != nil {
+			if err == mongo.ErrNoDocuments {
+				utils.NotFound(c, "parent comment not found")
+				return
+			}
+			utils.InternalError(c, "failed to get parent comment")
+			return
+		}
+
 		comment.ParentID = parentOID
-		// For two-level flat, root_id is always the top-level comment
-		comment.RootID = parentOID
+		// For two-level flat: if parent is already a reply, use its root_id; otherwise parent is the root
+		if parentComment.RootID.IsZero() {
+			comment.RootID = parentOID
+		} else {
+			comment.RootID = parentComment.RootID
+		}
 	}
 
 	if err := h.mongoRepo.CreateComment(ctx, comment); err != nil {
@@ -114,6 +130,25 @@ func (h *CommentHandler) Delete(c *gin.Context) {
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
+
+	// Get comment to check ownership
+	comment, err := h.mongoRepo.GetCommentByID(ctx, oid)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			utils.NotFound(c, "comment not found")
+			return
+		}
+		utils.InternalError(c, "failed to get comment")
+		return
+	}
+
+	// Check ownership or admin
+	userID, _ := c.Get("user_id")
+	userRole, _ := c.Get("user_role")
+	if comment.AuthorID != userID.(string) && userRole != "admin" {
+		utils.Forbidden(c, "not authorized to delete this comment")
+		return
+	}
 
 	if err := h.mongoRepo.DeleteComment(ctx, oid); err != nil {
 		utils.InternalError(c, "failed to delete comment")

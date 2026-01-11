@@ -28,11 +28,11 @@ const (
 
 // --- 1. Schema (Immutable, Versioned) ---
 type FieldSchema struct {
-	Key      string      `bson:"key" json:"key"`
-	Label    string      `bson:"label" json:"label"`
-	Type     FieldType   `bson:"type" json:"type"`
-	Required bool        `bson:"required" json:"required"`
-	Default  interface{} `bson:"default,omitempty" json:"default,omitempty"`
+	Key      string    `bson:"key" json:"key"`
+	Label    string    `bson:"label" json:"label"`
+	Type     FieldType `bson:"type" json:"type"`
+	Required bool      `bson:"required" json:"required"`
+	Default  any       `bson:"default,omitempty" json:"default,omitempty"`
 
 	// Complex Types
 	Children      []FieldSchema `bson:"children,omitempty" json:"children,omitempty"`
@@ -53,6 +53,7 @@ type Schema struct {
 // --- 2. Entry (Dynamic Content) ---
 type BaseMeta struct {
 	Title     string    `bson:"title" json:"title"`
+	Draft     bool      `bson:"draft" json:"draft"`
 	CreatedAt time.Time `bson:"created_at" json:"created_at"`
 	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
 }
@@ -64,9 +65,9 @@ type Entry struct {
 	SchemaVersion int                `bson:"schema_version" json:"schema_version"`
 	AuthorID      string             `bson:"author_id" json:"author_id"`
 
-	Base       BaseMeta               `bson:"base" json:"base"`
-	Body       string                 `bson:"body" json:"body"`
-	Attributes map[string]interface{} `bson:"attributes" json:"attributes"`
+	Base       BaseMeta       `bson:"base" json:"base"`
+	Body       string         `bson:"body" json:"body"`
+	Attributes map[string]any `bson:"attributes" json:"attributes"`
 }
 
 // --- 3. Taxonomy & Terms ---

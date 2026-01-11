@@ -2,9 +2,13 @@ package service
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
+	"time"
 
 	"matter-core/internal/config"
 	"matter-core/internal/model"
@@ -22,12 +26,17 @@ type AuthService struct {
 	cfg          *config.Config
 	githubConfig *oauth2.Config
 	googleConfig *oauth2.Config
+
+	// CSRF state store with expiration
+	stateMu    sync.RWMutex
+	stateStore map[string]time.Time
 }
 
 func NewAuthService(mongoRepo *repository.MongoRepo, cfg *config.Config) *AuthService {
 	svc := &AuthService{
-		mongoRepo: mongoRepo,
-		cfg:       cfg,
+		mongoRepo:  mongoRepo,
+		cfg:        cfg,
+		stateStore: make(map[string]time.Time),
 	}
 
 	if cfg.GitHubClientID != "" {
@@ -50,21 +59,72 @@ func NewAuthService(mongoRepo *repository.MongoRepo, cfg *config.Config) *AuthSe
 		}
 	}
 
+	// Start cleanup goroutine for expired states
+	go svc.cleanupExpiredStates()
+
 	return svc
 }
 
+// generateState creates a cryptographically secure random state for CSRF protection
+func (s *AuthService) generateState() (string, error) {
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	state := base64.URLEncoding.EncodeToString(b)
+
+	s.stateMu.Lock()
+	s.stateStore[state] = time.Now().Add(10 * time.Minute)
+	s.stateMu.Unlock()
+
+	return state, nil
+}
+
+// ValidateState checks if the state is valid and removes it from store
+func (s *AuthService) ValidateState(state string) bool {
+	s.stateMu.Lock()
+	defer s.stateMu.Unlock()
+
+	expiry, exists := s.stateStore[state]
+	if !exists {
+		return false
+	}
+	delete(s.stateStore, state)
+	return time.Now().Before(expiry)
+}
+
+// cleanupExpiredStates periodically removes expired states
+func (s *AuthService) cleanupExpiredStates() {
+	ticker := time.NewTicker(5 * time.Minute)
+	for range ticker.C {
+		s.stateMu.Lock()
+		now := time.Now()
+		for state, expiry := range s.stateStore {
+			if now.After(expiry) {
+				delete(s.stateStore, state)
+			}
+		}
+		s.stateMu.Unlock()
+	}
+}
+
 func (s *AuthService) GetAuthURL(provider string) (string, error) {
+	state, err := s.generateState()
+	if err != nil {
+		return "", errors.New("failed to generate state")
+	}
+
 	switch provider {
 	case "github":
 		if s.githubConfig == nil {
 			return "", errors.New("github oauth not configured")
 		}
-		return s.githubConfig.AuthCodeURL("state"), nil
+		return s.githubConfig.AuthCodeURL(state), nil
 	case "google":
 		if s.googleConfig == nil {
 			return "", errors.New("google oauth not configured")
 		}
-		return s.googleConfig.AuthCodeURL("state"), nil
+		return s.googleConfig.AuthCodeURL(state), nil
 	default:
 		return "", errors.New("unsupported provider")
 	}

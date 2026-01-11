@@ -16,11 +16,11 @@ func NewSchemaValidator(mongoRepo *repository.MongoRepo) *SchemaValidator {
 	return &SchemaValidator{mongoRepo: mongoRepo}
 }
 
-func (v *SchemaValidator) ValidateEntry(schema model.Schema, data map[string]interface{}) error {
+func (v *SchemaValidator) ValidateEntry(schema model.Schema, data map[string]any) error {
 	return v.validateFields(schema.Fields, data)
 }
 
-func (v *SchemaValidator) validateFields(fields []model.FieldSchema, data map[string]interface{}) error {
+func (v *SchemaValidator) validateFields(fields []model.FieldSchema, data map[string]any) error {
 	for _, field := range fields {
 		value, exists := data[field.Key]
 
@@ -79,7 +79,7 @@ func (v *SchemaValidator) validateFieldType(field model.FieldSchema, value inter
 		}
 
 	case model.TypeObject:
-		obj, ok := value.(map[string]interface{})
+		obj, ok := value.(map[string]any)
 		if !ok {
 			return fmt.Errorf("field '%s' must be an object", field.Key)
 		}
@@ -90,7 +90,7 @@ func (v *SchemaValidator) validateFieldType(field model.FieldSchema, value inter
 		}
 
 	case model.TypeArray:
-		arr, ok := value.([]interface{})
+		arr, ok := value.([]any)
 		if !ok {
 			return fmt.Errorf("field '%s' must be an array", field.Key)
 		}
@@ -104,7 +104,7 @@ func (v *SchemaValidator) validateFieldType(field model.FieldSchema, value inter
 
 	case model.TypeTaxonomy:
 		if field.AllowMultiple {
-			arr, ok := value.([]interface{})
+			arr, ok := value.([]any)
 			if !ok {
 				return fmt.Errorf("field '%s' must be an array of term IDs", field.Key)
 			}

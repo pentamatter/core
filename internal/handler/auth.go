@@ -47,9 +47,16 @@ func (h *AuthHandler) SignIn(c *gin.Context) {
 func (h *AuthHandler) Callback(c *gin.Context) {
 	provider := c.Param("provider")
 	code := c.Query("code")
+	state := c.Query("state")
 
 	if code == "" {
 		c.Redirect(http.StatusFound, h.cfg.FrontendURL+"?error=missing_code")
+		return
+	}
+
+	// Validate CSRF state
+	if !h.authService.ValidateState(state) {
+		c.Redirect(http.StatusFound, h.cfg.FrontendURL+"?error=invalid_state")
 		return
 	}
 

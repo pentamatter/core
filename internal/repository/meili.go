@@ -12,19 +12,30 @@ import (
 
 var schemaKeyRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 
-func isValidSchemaKey(key string) bool {
+// IsValidSchemaKey validates schema key format
+func IsValidSchemaKey(key string) bool {
 	return len(key) <= 50 && schemaKeyRegex.MatchString(key)
 }
 
 type MeiliRepo struct {
-	client meilisearch.ServiceManager
-	index  meilisearch.IndexManager
+	client    meilisearch.ServiceManager
+	index     meilisearch.IndexManager
+	indexName string
 }
 
 func NewMeiliRepo(host, apiKey string) (*MeiliRepo, error) {
+	return NewMeiliRepoWithIndex(host, apiKey, "entries")
+}
+
+func NewMeiliRepoWithIndex(host, apiKey, indexName string) (*MeiliRepo, error) {
 	client := meilisearch.New(host, meilisearch.WithAPIKey(apiKey))
 
-	index := client.Index("entries")
+	// Check if Meilisearch is healthy
+	if !client.IsHealthy() {
+		return nil, fmt.Errorf("meilisearch is not healthy at %s", host)
+	}
+
+	index := client.Index(indexName)
 
 	// Configure searchable and filterable attributes
 	searchable := []string{"title", "body", "all_text", "schema_key"}
@@ -40,8 +51,9 @@ func NewMeiliRepo(host, apiKey string) (*MeiliRepo, error) {
 	}
 
 	return &MeiliRepo{
-		client: client,
-		index:  index,
+		client:    client,
+		index:     index,
+		indexName: indexName,
 	}, nil
 }
 
@@ -67,7 +79,7 @@ func (r *MeiliRepo) Search(query string, schemaKey string, limit, offset int64) 
 	if schemaKey != "" {
 		// Sanitize schemaKey to prevent filter injection
 		// Only allow alphanumeric, underscore, and hyphen
-		if !isValidSchemaKey(schemaKey) {
+		if !IsValidSchemaKey(schemaKey) {
 			return nil, 0, fmt.Errorf("invalid schema_key format")
 		}
 		searchReq.Filter = fmt.Sprintf("schema_key = \"%s\"", schemaKey)

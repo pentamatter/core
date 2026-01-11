@@ -128,8 +128,14 @@ func isEmojiRune(r rune) bool {
 	// Arrows
 	case r >= 0x2190 && r <= 0x21FF:
 		return true
-	// Number signs with keycap
-	case r >= 0x0023 && r <= 0x0039:
+	// Digits 0-9 (for keycap emoji like 1️⃣)
+	case r >= 0x0030 && r <= 0x0039:
+		return true
+	// Hash sign (for keycap emoji like #️⃣)
+	case r == 0x0023:
+		return true
+	// Asterisk (for keycap emoji like *️⃣)
+	case r == 0x002A:
 		return true
 	}
 	return false

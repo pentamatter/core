@@ -161,3 +161,28 @@ type SearchDocument struct {
 	SchemaKey string `json:"schema_key"`
 	AllText   string `json:"all_text"`
 }
+
+// --- 8. Reaction System ---
+
+// TargetType 定义 reaction 目标类型
+type TargetType string
+
+const (
+	TargetEntry   TargetType = "entry"
+	TargetComment TargetType = "comment"
+)
+
+// ReactionSummary 存储在 MongoDB 中的 reaction 聚合统计
+type ReactionSummary struct {
+	ID         primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	TargetID   primitive.ObjectID `bson:"target_id" json:"target_id"`
+	TargetType TargetType         `bson:"target_type" json:"target_type"`
+	Reactions  map[string]int     `bson:"reactions" json:"reactions"` // emoji -> count
+	UpdatedAt  time.Time          `bson:"updated_at" json:"updated_at"`
+}
+
+// ReactionResponse API 返回的 reaction 信息
+type ReactionResponse struct {
+	Reactions     map[string]int `json:"reactions"`      // emoji -> count
+	UserReactions []string       `json:"user_reactions"` // 当前用户已添加的 emoji 列表
+}

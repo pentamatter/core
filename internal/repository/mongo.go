@@ -12,16 +12,17 @@ import (
 )
 
 type MongoRepo struct {
-	client      *mongo.Client
-	db          *mongo.Database
-	schemas     *mongo.Collection
-	entries     *mongo.Collection
-	users       *mongo.Collection
-	taxonomy    *mongo.Collection
-	terms       *mongo.Collection
-	comments    *mongo.Collection
-	sessions    *mongo.Collection
-	oauthStates *mongo.Collection
+	client            *mongo.Client
+	db                *mongo.Database
+	schemas           *mongo.Collection
+	entries           *mongo.Collection
+	users             *mongo.Collection
+	taxonomy          *mongo.Collection
+	terms             *mongo.Collection
+	comments          *mongo.Collection
+	sessions          *mongo.Collection
+	oauthStates       *mongo.Collection
+	reactionSummaries *mongo.Collection
 }
 
 func NewMongoRepo(uri, dbName string) (*MongoRepo, error) {
@@ -39,16 +40,17 @@ func NewMongoRepo(uri, dbName string) (*MongoRepo, error) {
 
 	db := client.Database(dbName)
 	repo := &MongoRepo{
-		client:      client,
-		db:          db,
-		schemas:     db.Collection("schemas"),
-		entries:     db.Collection("entries"),
-		users:       db.Collection("users"),
-		taxonomy:    db.Collection("taxonomies"),
-		terms:       db.Collection("terms"),
-		comments:    db.Collection("comments"),
-		sessions:    db.Collection("sessions"),
-		oauthStates: db.Collection("oauth_states"),
+		client:            client,
+		db:                db,
+		schemas:           db.Collection("schemas"),
+		entries:           db.Collection("entries"),
+		users:             db.Collection("users"),
+		taxonomy:          db.Collection("taxonomies"),
+		terms:             db.Collection("terms"),
+		comments:          db.Collection("comments"),
+		sessions:          db.Collection("sessions"),
+		oauthStates:       db.Collection("oauth_states"),
+		reactionSummaries: db.Collection("reaction_summaries"),
 	}
 
 	if err := repo.ensureIndexes(ctx); err != nil {
@@ -125,6 +127,15 @@ func (r *MongoRepo) ensureIndexes(ctx context.Context) error {
 	_, err = r.oauthStates.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "state", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
+	})
+	if err != nil {
+		return err
+	}
+
+	// Reaction summaries indexes
+	_, err = r.reactionSummaries.Indexes().CreateOne(ctx, mongo.IndexModel{
+		Keys:    bson.D{{Key: "target_type", Value: 1}, {Key: "target_id", Value: 1}},
+		Options: options.Index().SetUnique(true),
 	})
 	return err
 }
@@ -625,4 +636,125 @@ func (r *MongoRepo) GetAndDeleteOAuthState(ctx context.Context, state string) (*
 		return nil, err
 	}
 	return &oauthState, nil
+}
+
+// --- Reaction Summary Operations ---
+
+// MongoReactionTarget represents a target for MongoDB batch queries
+type MongoReactionTarget struct {
+	Type model.TargetType
+	ID   primitive.ObjectID
+}
+
+// GetReactionSummary retrieves the reaction summary for a single target
+func (r *MongoRepo) GetReactionSummary(ctx context.Context, targetType model.TargetType, targetID primitive.ObjectID) (*model.ReactionSummary, error) {
+	var summary model.ReactionSummary
+	err := r.reactionSummaries.FindOne(ctx, bson.M{
+		"target_type": targetType,
+		"target_id":   targetID,
+	}).Decode(&summary)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			return nil, nil
+		}
+		return nil, err
+	}
+	return &summary, nil
+}
+
+// GetReactionSummaries retrieves reaction summaries for multiple targets
+func (r *MongoRepo) GetReactionSummaries(ctx context.Context, targets []MongoReactionTarget) ([]model.ReactionSummary, error) {
+	if len(targets) == 0 {
+		return []model.ReactionSummary{}, nil
+	}
+
+	// Build $or query for all targets
+	orConditions := make([]bson.M, len(targets))
+	for i, t := range targets {
+		orConditions[i] = bson.M{
+			"target_type": t.Type,
+			"target_id":   t.ID,
+		}
+	}
+
+	cursor, err := r.reactionSummaries.Find(ctx, bson.M{"$or": orConditions})
+	if err != nil {
+		return nil, err
+	}
+	defer cursor.Close(ctx)
+
+	var summaries []model.ReactionSummary
+	if err := cursor.All(ctx, &summaries); err != nil {
+		return nil, err
+	}
+	return summaries, nil
+}
+
+// IncrementReaction increments the count for a specific emoji on a target
+func (r *MongoRepo) IncrementReaction(ctx context.Context, targetType model.TargetType, targetID primitive.ObjectID, emoji string) error {
+	filter := bson.M{
+		"target_type": targetType,
+		"target_id":   targetID,
+	}
+	update := bson.M{
+		"$inc": bson.M{
+			"reactions." + emoji: 1,
+		},
+		"$set": bson.M{
+			"updated_at": time.Now(),
+		},
+		"$setOnInsert": bson.M{
+			"target_type": targetType,
+			"target_id":   targetID,
+		},
+	}
+	opts := options.Update().SetUpsert(true)
+	_, err := r.reactionSummaries.UpdateOne(ctx, filter, update, opts)
+	return err
+}
+
+// DecrementReaction decrements the count for a specific emoji on a target
+// If the count reaches 0, the emoji key is removed from the reactions map
+func (r *MongoRepo) DecrementReaction(ctx context.Context, targetType model.TargetType, targetID primitive.ObjectID, emoji string) error {
+	filter := bson.M{
+		"target_type": targetType,
+		"target_id":   targetID,
+	}
+
+	// First, decrement the count
+	update := bson.M{
+		"$inc": bson.M{
+			"reactions." + emoji: -1,
+		},
+		"$set": bson.M{
+			"updated_at": time.Now(),
+		},
+	}
+	_, err := r.reactionSummaries.UpdateOne(ctx, filter, update)
+	if err != nil {
+		return err
+	}
+
+	// Then, remove the emoji key if count is 0 or less
+	cleanupFilter := bson.M{
+		"target_type":        targetType,
+		"target_id":          targetID,
+		"reactions." + emoji: bson.M{"$lte": 0},
+	}
+	cleanupUpdate := bson.M{
+		"$unset": bson.M{
+			"reactions." + emoji: "",
+		},
+	}
+	_, err = r.reactionSummaries.UpdateOne(ctx, cleanupFilter, cleanupUpdate)
+	return err
+}
+
+// DeleteReactionSummary deletes the reaction summary for a target
+func (r *MongoRepo) DeleteReactionSummary(ctx context.Context, targetType model.TargetType, targetID primitive.ObjectID) error {
+	_, err := r.reactionSummaries.DeleteOne(ctx, bson.M{
+		"target_type": targetType,
+		"target_id":   targetID,
+	})
+	return err
 }

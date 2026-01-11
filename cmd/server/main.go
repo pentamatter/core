@@ -32,6 +32,17 @@ func main() {
 		_ = mongoRepo.Close(ctx)
 	}()
 
+	// Initialize Redis (Requirement 6.3)
+	redisRepo, err := repository.NewRedisRepo(cfg.RedisAddr, cfg.RedisPassword, cfg.RedisDB)
+	if err != nil {
+		log.Fatalf("Failed to connect to Redis: %v", err)
+	}
+	defer func() {
+		if err := redisRepo.Close(); err != nil {
+			log.Printf("Error closing Redis connection: %v", err)
+		}
+	}()
+
 	// Initialize Meilisearch (optional)
 	var meiliRepo *repository.MeiliRepo
 	if cfg.MeilisearchHost != "" {
@@ -49,6 +60,7 @@ func main() {
 	}
 	authService := service.NewAuthService(mongoRepo, cfg)
 	sessionStore := service.NewSessionStore(mongoRepo)
+	reactionService := service.NewReactionService(mongoRepo, redisRepo)
 
 	// Initialize handlers
 	schemaHandler := handler.NewSchemaHandler(mongoRepo)
@@ -57,6 +69,7 @@ func main() {
 	taxonomyHandler := handler.NewTaxonomyHandler(mongoRepo)
 	termHandler := handler.NewTermHandler(mongoRepo)
 	commentHandler := handler.NewCommentHandler(mongoRepo)
+	reactionHandler := handler.NewReactionHandler(reactionService, mongoRepo)
 
 	// Setup Gin router
 	r := gin.Default()
@@ -136,6 +149,17 @@ func main() {
 			comments.POST("", handler.AuthMiddleware(sessionStore), commentHandler.Create)
 			comments.PUT("/:id", handler.AuthMiddleware(sessionStore), commentHandler.Update)
 			comments.DELETE("/:id", handler.AuthMiddleware(sessionStore), commentHandler.Delete)
+		}
+
+		// Reaction routes (Requirements: 8.1, 8.2, 8.3, 8.4, 1.6)
+		reactions := v1.Group("/reactions")
+		{
+			// POST and DELETE require authentication (Requirement 1.6)
+			reactions.POST("", handler.AuthMiddleware(sessionStore), reactionHandler.Add)
+			reactions.DELETE("", handler.AuthMiddleware(sessionStore), reactionHandler.Remove)
+			// GET and batch query support optional authentication
+			reactions.GET("", handler.OptionalAuthMiddleware(sessionStore), reactionHandler.Get)
+			reactions.POST("/batch", handler.OptionalAuthMiddleware(sessionStore), reactionHandler.GetBatch)
 		}
 	}
 

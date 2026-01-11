@@ -135,7 +135,7 @@
     - POST /api/v1/reactions/batch (可选认证)
     - _Requirements: 8.1, 8.2, 8.3, 8.4, 1.6_
 
-- [-] 8. Checkpoint - 确保基础功能完成
+- [x] 8. Checkpoint - 确保基础功能完成
   - 确保所有代码编译通过
   - 确保 Redis 和 MongoDB 连接正常
   - 如有问题请询问用户

@@ -161,3 +161,63 @@ func (v *SchemaValidator) validateTaxonomyField(ctx context.Context, field model
 	}
 	return nil
 }
+
+// ExtractTermIDs 从 attributes 中提取所有 taxonomy 类型字段的 term ID
+func (v *SchemaValidator) ExtractTermIDs(schema model.Schema, data map[string]any) []primitive.ObjectID {
+	var termIDs []primitive.ObjectID
+	seen := make(map[primitive.ObjectID]bool)
+
+	v.extractTermIDsFromFields(schema.Fields, data, &termIDs, seen)
+	return termIDs
+}
+
+func (v *SchemaValidator) extractTermIDsFromFields(fields []model.FieldSchema, data map[string]any, termIDs *[]primitive.ObjectID, seen map[primitive.ObjectID]bool) {
+	for _, field := range fields {
+		value, exists := data[field.Key]
+		if !exists || value == nil {
+			continue
+		}
+
+		switch field.Type {
+		case model.TypeTaxonomy:
+			v.extractTermIDsFromTaxonomyField(field, value, termIDs, seen)
+		case model.TypeObject:
+			if obj, ok := value.(map[string]any); ok && len(field.Children) > 0 {
+				v.extractTermIDsFromFields(field.Children, obj, termIDs, seen)
+			}
+		case model.TypeArray:
+			if arr, ok := value.([]any); ok && field.ItemType != nil && field.ItemType.Type == model.TypeObject {
+				for _, item := range arr {
+					if obj, ok := item.(map[string]any); ok {
+						v.extractTermIDsFromFields(field.ItemType.Children, obj, termIDs, seen)
+					}
+				}
+			}
+		}
+	}
+}
+
+func (v *SchemaValidator) extractTermIDsFromTaxonomyField(field model.FieldSchema, value interface{}, termIDs *[]primitive.ObjectID, seen map[primitive.ObjectID]bool) {
+	addTermID := func(termIDStr string) {
+		if oid, err := primitive.ObjectIDFromHex(termIDStr); err == nil {
+			if !seen[oid] {
+				seen[oid] = true
+				*termIDs = append(*termIDs, oid)
+			}
+		}
+	}
+
+	if field.AllowMultiple {
+		if arr, ok := value.([]any); ok {
+			for _, item := range arr {
+				if termIDStr, ok := item.(string); ok {
+					addTermID(termIDStr)
+				}
+			}
+		}
+	} else {
+		if termIDStr, ok := value.(string); ok {
+			addTermID(termIDStr)
+		}
+	}
+}

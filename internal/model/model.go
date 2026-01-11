@@ -66,9 +66,10 @@ type Entry struct {
 	SchemaVersion int                `bson:"schema_version" json:"schema_version"`
 	AuthorID      string             `bson:"author_id" json:"author_id"`
 
-	Base       BaseMeta       `bson:"base" json:"base"`
-	Body       string         `bson:"body" json:"body"`
-	Attributes map[string]any `bson:"attributes" json:"attributes"`
+	Base       BaseMeta             `bson:"base" json:"base"`
+	Body       string               `bson:"body" json:"body"`
+	Attributes map[string]any       `bson:"attributes" json:"attributes"`
+	TermIDs    []primitive.ObjectID `bson:"term_ids,omitempty" json:"term_ids,omitempty"` // 所有关联的 term ID，用于快速查询
 }
 
 // --- 3. Taxonomy & Terms ---

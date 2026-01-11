@@ -69,11 +69,12 @@ func (r *MongoRepo) ensureIndexes(ctx context.Context) error {
 		return err
 	}
 
-	// Entry wildcard index for attributes
+	// Entry indexes
 	_, err = r.entries.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "attributes.$**", Value: 1}}},
 		{Keys: bson.D{{Key: "schema_key", Value: 1}}},
 		{Keys: bson.D{{Key: "author_id", Value: 1}}},
+		{Keys: bson.D{{Key: "term_ids", Value: 1}}}, // 用于按 term 查询 entry
 	})
 	if err != nil {
 		return err
@@ -288,6 +289,31 @@ func (r *MongoRepo) GetEntriesByIDs(ctx context.Context, ids []primitive.ObjectI
 		}
 	}
 	return ordered, nil
+}
+
+func (r *MongoRepo) ListEntriesByTermID(ctx context.Context, termID primitive.ObjectID, draft *bool, limit, offset int64) ([]model.Entry, error) {
+	filter := bson.M{"term_ids": termID}
+	if draft != nil {
+		filter["base.draft"] = *draft
+	}
+	opts := options.Find().SetLimit(limit).SetSkip(offset).SetSort(bson.D{{Key: "base.created_at", Value: -1}})
+	cursor, err := r.entries.Find(ctx, filter, opts)
+	if err != nil {
+		return nil, err
+	}
+	var entries []model.Entry
+	if err := cursor.All(ctx, &entries); err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+func (r *MongoRepo) CountEntriesByTermID(ctx context.Context, termID primitive.ObjectID, draft *bool) (int64, error) {
+	filter := bson.M{"term_ids": termID}
+	if draft != nil {
+		filter["base.draft"] = *draft
+	}
+	return r.entries.CountDocuments(ctx, filter)
 }
 
 // --- User Operations ---

@@ -76,6 +76,9 @@ func (h *EntryHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// 提取所有 term IDs 用于快速查询
+	termIDs := h.validator.ExtractTermIDs(*schema, req.Attributes)
+
 	entry := &model.Entry{
 		SchemaID:      schema.ID,
 		SchemaKey:     schema.Key,
@@ -88,6 +91,7 @@ func (h *EntryHandler) Create(c *gin.Context) {
 		},
 		Body:       req.Body,
 		Attributes: req.Attributes,
+		TermIDs:    termIDs,
 	}
 
 	if err := h.mongoRepo.CreateEntry(ctx, entry); err != nil {
@@ -170,6 +174,8 @@ func (h *EntryHandler) Update(c *gin.Context) {
 			return
 		}
 		entry.Attributes = req.Attributes
+		// 更新 term IDs
+		entry.TermIDs = h.validator.ExtractTermIDs(*schema, req.Attributes)
 	}
 
 	if err := h.mongoRepo.UpdateEntry(ctx, entry); err != nil {
@@ -251,6 +257,7 @@ func (h *EntryHandler) Get(c *gin.Context) {
 func (h *EntryHandler) List(c *gin.Context) {
 	query := c.Query("q")
 	schemaKey := c.Query("schema_key")
+	termIDStr := c.Query("term_id")
 	draftParam := c.Query("draft")
 	limitStr := c.DefaultQuery("limit", "20")
 	offsetStr := c.DefaultQuery("offset", "0")
@@ -263,6 +270,17 @@ func (h *EntryHandler) List(c *gin.Context) {
 	}
 	if offset < 0 {
 		offset = 0
+	}
+
+	// 解析 term_id
+	var termID primitive.ObjectID
+	if termIDStr != "" {
+		var err error
+		termID, err = primitive.ObjectIDFromHex(termIDStr)
+		if err != nil {
+			utils.BadRequest(c, "invalid term_id")
+			return
+		}
 	}
 
 	// 处理 draft 过滤
@@ -319,8 +337,34 @@ func (h *EntryHandler) List(c *gin.Context) {
 				}
 				entries = filtered
 			}
+			// 如果指定了 term_id，二次过滤
+			if !termID.IsZero() {
+				filtered := make([]model.Entry, 0)
+				for _, e := range entries {
+					for _, tid := range e.TermIDs {
+						if tid == termID {
+							filtered = append(filtered, e)
+							break
+						}
+					}
+				}
+				entries = filtered
+			}
 		} else {
 			entries = []model.Entry{}
+		}
+	} else if !termID.IsZero() {
+		// 按 term_id 查询
+		var err error
+		entries, err = h.mongoRepo.ListEntriesByTermID(ctx, termID, draft, limit, offset)
+		if err != nil {
+			utils.InternalError(c, "failed to list entries")
+			return
+		}
+		total, err = h.mongoRepo.CountEntriesByTermID(ctx, termID, draft)
+		if err != nil {
+			utils.InternalError(c, "failed to count entries")
+			return
 		}
 	} else {
 		// Direct MongoDB query

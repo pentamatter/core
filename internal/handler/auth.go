@@ -34,7 +34,7 @@ func NewAuthHandler(authService *service.AuthService, sessionStore *service.Sess
 func (h *AuthHandler) SignIn(c *gin.Context) {
 	provider := c.Param("provider")
 
-	url, err := h.authService.GetAuthURL(provider)
+	url, err := h.authService.GetAuthURL(c.Request.Context(), provider)
 	if err != nil {
 		utils.BadRequest(c, err.Error())
 		return
@@ -55,7 +55,7 @@ func (h *AuthHandler) Callback(c *gin.Context) {
 	}
 
 	// Validate CSRF state
-	if !h.authService.ValidateState(state) {
+	if !h.authService.ValidateState(c.Request.Context(), state) {
 		c.Redirect(http.StatusFound, h.cfg.FrontendURL+"?error=invalid_state")
 		return
 	}
@@ -80,7 +80,7 @@ func (h *AuthHandler) Callback(c *gin.Context) {
 		token,
 		int(SessionDuration.Seconds()),
 		"/",
-		"",
+		h.cfg.CookieDomain,
 		h.cfg.SecureCookie,
 		true, // HttpOnly
 	)
@@ -113,7 +113,47 @@ func (h *AuthHandler) SignOut(c *gin.Context) {
 	}
 
 	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(SessionCookieName, "", -1, "/", "", h.cfg.SecureCookie, true)
+	c.SetCookie(SessionCookieName, "", -1, "/", h.cfg.CookieDomain, h.cfg.SecureCookie, true)
 
 	utils.Success(c, nil)
+}
+
+type UpdateProfileRequest struct {
+	Nickname string `json:"nickname" binding:"omitempty,max=50"`
+	Avatar   string `json:"avatar" binding:"omitempty,url,max=500"`
+}
+
+// PUT /api/v1/auth/profile - 更新用户信息
+func (h *AuthHandler) UpdateProfile(c *gin.Context) {
+	var req UpdateProfileRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+
+	if req.Nickname == "" && req.Avatar == "" {
+		utils.BadRequest(c, "nothing to update")
+		return
+	}
+
+	userID, _ := c.Get("user_id")
+	user, err := h.authService.GetUserByID(c.Request.Context(), userID.(string))
+	if err != nil {
+		utils.InternalError(c, "failed to get user")
+		return
+	}
+
+	if req.Nickname != "" {
+		user.Nickname = req.Nickname
+	}
+	if req.Avatar != "" {
+		user.Avatar = req.Avatar
+	}
+
+	if err := h.authService.UpdateUser(c.Request.Context(), user); err != nil {
+		utils.InternalError(c, "failed to update profile")
+		return
+	}
+
+	utils.Success(c, user)
 }

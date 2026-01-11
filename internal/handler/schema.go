@@ -111,6 +111,17 @@ func (h *SchemaHandler) Delete(c *gin.Context) {
 		return
 	}
 
+	// Check if any entries are using this schema
+	entryCount, err := h.mongoRepo.CountEntries(ctx, key, nil)
+	if err != nil {
+		utils.InternalError(c, "failed to check entries")
+		return
+	}
+	if entryCount > 0 {
+		utils.BadRequest(c, "cannot delete schema: entries are using this schema")
+		return
+	}
+
 	// Delete all versions of this schema
 	if err := h.mongoRepo.DeleteSchemasByKey(ctx, key); err != nil {
 		utils.InternalError(c, "failed to delete schema")

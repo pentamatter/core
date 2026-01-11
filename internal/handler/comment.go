@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"strconv"
 	"time"
 
 	"matter-core/internal/model"
@@ -108,16 +109,85 @@ func (h *CommentHandler) ListByEntry(c *gin.Context) {
 		return
 	}
 
+	limitStr := c.DefaultQuery("limit", "50")
+	offsetStr := c.DefaultQuery("offset", "0")
+	limit, _ := strconv.ParseInt(limitStr, 10, 64)
+	offset, _ := strconv.ParseInt(offsetStr, 10, 64)
+
+	if limit <= 0 || limit > 100 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 
-	comments, err := h.mongoRepo.GetCommentsByEntry(ctx, entryOID)
+	comments, err := h.mongoRepo.GetCommentsByEntryPaginated(ctx, entryOID, limit, offset)
 	if err != nil {
 		utils.InternalError(c, "failed to list comments")
 		return
 	}
 
-	utils.Success(c, comments)
+	total, err := h.mongoRepo.CountCommentsByEntry(ctx, entryOID)
+	if err != nil {
+		utils.InternalError(c, "failed to count comments")
+		return
+	}
+
+	if comments == nil {
+		comments = []model.CommentWithAuthor{}
+	}
+
+	utils.SuccessWithPagination(c, comments, total, limit, offset)
+}
+
+type UpdateCommentRequest struct {
+	Content string `json:"content" binding:"required,min=1,max=5000"`
+}
+
+func (h *CommentHandler) Update(c *gin.Context) {
+	id := c.Param("id")
+	oid, err := primitive.ObjectIDFromHex(id)
+	if err != nil {
+		utils.BadRequest(c, "invalid comment id")
+		return
+	}
+
+	var req UpdateCommentRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.BadRequest(c, err.Error())
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
+	defer cancel()
+
+	comment, err := h.mongoRepo.GetCommentByID(ctx, oid)
+	if err != nil {
+		if err == mongo.ErrNoDocuments {
+			utils.NotFound(c, "comment not found")
+			return
+		}
+		utils.InternalError(c, "failed to get comment")
+		return
+	}
+
+	// 只有作者可以编辑评论
+	userID, _ := c.Get("user_id")
+	if comment.AuthorID != userID.(string) {
+		utils.Forbidden(c, "not authorized to update this comment")
+		return
+	}
+
+	comment.Content = req.Content
+	if err := h.mongoRepo.UpdateComment(ctx, comment); err != nil {
+		utils.InternalError(c, "failed to update comment")
+		return
+	}
+
+	utils.Success(c, comment)
 }
 
 func (h *CommentHandler) Delete(c *gin.Context) {
@@ -148,6 +218,15 @@ func (h *CommentHandler) Delete(c *gin.Context) {
 	if comment.AuthorID != userID.(string) && userRole != "admin" {
 		utils.Forbidden(c, "not authorized to delete this comment")
 		return
+	}
+
+	// Delete comment and its replies (if this is a root comment)
+	if comment.RootID.IsZero() {
+		// This is a root comment, delete all replies first
+		if err := h.mongoRepo.DeleteCommentsByRootID(ctx, oid); err != nil {
+			utils.InternalError(c, "failed to delete replies")
+			return
+		}
 	}
 
 	if err := h.mongoRepo.DeleteComment(ctx, oid); err != nil {

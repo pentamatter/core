@@ -12,15 +12,16 @@ import (
 )
 
 type MongoRepo struct {
-	client   *mongo.Client
-	db       *mongo.Database
-	schemas  *mongo.Collection
-	entries  *mongo.Collection
-	users    *mongo.Collection
-	taxonomy *mongo.Collection
-	terms    *mongo.Collection
-	comments *mongo.Collection
-	sessions *mongo.Collection
+	client      *mongo.Client
+	db          *mongo.Database
+	schemas     *mongo.Collection
+	entries     *mongo.Collection
+	users       *mongo.Collection
+	taxonomy    *mongo.Collection
+	terms       *mongo.Collection
+	comments    *mongo.Collection
+	sessions    *mongo.Collection
+	oauthStates *mongo.Collection
 }
 
 func NewMongoRepo(uri, dbName string) (*MongoRepo, error) {
@@ -38,15 +39,16 @@ func NewMongoRepo(uri, dbName string) (*MongoRepo, error) {
 
 	db := client.Database(dbName)
 	repo := &MongoRepo{
-		client:   client,
-		db:       db,
-		schemas:  db.Collection("schemas"),
-		entries:  db.Collection("entries"),
-		users:    db.Collection("users"),
-		taxonomy: db.Collection("taxonomies"),
-		terms:    db.Collection("terms"),
-		comments: db.Collection("comments"),
-		sessions: db.Collection("sessions"),
+		client:      client,
+		db:          db,
+		schemas:     db.Collection("schemas"),
+		entries:     db.Collection("entries"),
+		users:       db.Collection("users"),
+		taxonomy:    db.Collection("taxonomies"),
+		terms:       db.Collection("terms"),
+		comments:    db.Collection("comments"),
+		sessions:    db.Collection("sessions"),
+		oauthStates: db.Collection("oauth_states"),
 	}
 
 	if err := repo.ensureIndexes(ctx); err != nil {
@@ -113,6 +115,15 @@ func (r *MongoRepo) ensureIndexes(ctx context.Context) error {
 	// Session indexes
 	_, err = r.sessions.Indexes().CreateMany(ctx, []mongo.IndexModel{
 		{Keys: bson.D{{Key: "token", Value: 1}}, Options: options.Index().SetUnique(true)},
+		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
+	})
+	if err != nil {
+		return err
+	}
+
+	// OAuth state indexes
+	_, err = r.oauthStates.Indexes().CreateMany(ctx, []mongo.IndexModel{
+		{Keys: bson.D{{Key: "state", Value: 1}}, Options: options.Index().SetUnique(true)},
 		{Keys: bson.D{{Key: "expires_at", Value: 1}}, Options: options.Index().SetExpireAfterSeconds(0)},
 	})
 	return err
@@ -196,6 +207,10 @@ func (r *MongoRepo) UpdateEntry(ctx context.Context, entry *model.Entry) error {
 }
 
 func (r *MongoRepo) DeleteEntry(ctx context.Context, id primitive.ObjectID) error {
+	// 先删除关联的评论
+	if _, err := r.comments.DeleteMany(ctx, bson.M{"entry_id": id}); err != nil {
+		return err
+	}
 	_, err := r.entries.DeleteOne(ctx, bson.M{"_id": id})
 	return err
 }
@@ -209,10 +224,13 @@ func (r *MongoRepo) GetEntryByID(ctx context.Context, id primitive.ObjectID) (*m
 	return &entry, nil
 }
 
-func (r *MongoRepo) ListEntries(ctx context.Context, schemaKey string, limit, offset int64) ([]model.Entry, error) {
+func (r *MongoRepo) ListEntries(ctx context.Context, schemaKey string, draft *bool, limit, offset int64) ([]model.Entry, error) {
 	filter := bson.M{}
 	if schemaKey != "" {
 		filter["schema_key"] = schemaKey
+	}
+	if draft != nil {
+		filter["base.draft"] = *draft
 	}
 	opts := options.Find().SetLimit(limit).SetSkip(offset).SetSort(bson.D{{Key: "base.created_at", Value: -1}})
 	cursor, err := r.entries.Find(ctx, filter, opts)
@@ -226,10 +244,13 @@ func (r *MongoRepo) ListEntries(ctx context.Context, schemaKey string, limit, of
 	return entries, nil
 }
 
-func (r *MongoRepo) CountEntries(ctx context.Context, schemaKey string) (int64, error) {
+func (r *MongoRepo) CountEntries(ctx context.Context, schemaKey string, draft *bool) (int64, error) {
 	filter := bson.M{}
 	if schemaKey != "" {
 		filter["schema_key"] = schemaKey
+	}
+	if draft != nil {
+		filter["base.draft"] = *draft
 	}
 	return r.entries.CountDocuments(ctx, filter)
 }
@@ -293,6 +314,22 @@ func (r *MongoRepo) GetUserBySocial(ctx context.Context, provider, providerUserI
 		return nil, err
 	}
 	return &user, nil
+}
+
+func (r *MongoRepo) GetUserByEmail(ctx context.Context, email string) (*model.User, error) {
+	var user model.User
+	err := r.users.FindOne(ctx, bson.M{"email": email}).Decode(&user)
+	if err != nil {
+		return nil, err
+	}
+	return &user, nil
+}
+
+func (r *MongoRepo) AddUserSocial(ctx context.Context, userID primitive.ObjectID, social model.SocialBind) error {
+	_, err := r.users.UpdateOne(ctx, bson.M{"_id": userID}, bson.M{
+		"$push": bson.M{"socials": social},
+	})
+	return err
 }
 
 func (r *MongoRepo) UpdateUser(ctx context.Context, user *model.User) error {
@@ -391,6 +428,31 @@ func (r *MongoRepo) DeleteTerm(ctx context.Context, id primitive.ObjectID) error
 	return err
 }
 
+func (r *MongoRepo) HasChildTerms(ctx context.Context, parentID primitive.ObjectID) (bool, error) {
+	count, err := r.terms.CountDocuments(ctx, bson.M{"parent_id": parentID})
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (r *MongoRepo) HasTermReferences(ctx context.Context, taxonomyKey string, termID primitive.ObjectID) (bool, error) {
+	// Check if any entry's attributes contain this term ID
+	// This searches in attributes where taxonomy fields store term IDs
+	termIDStr := termID.Hex()
+	filter := bson.M{
+		"$or": []bson.M{
+			{"attributes." + taxonomyKey: termIDStr},
+			{"attributes." + taxonomyKey: bson.M{"$in": []string{termIDStr}}},
+		},
+	}
+	count, err := r.entries.CountDocuments(ctx, filter)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
 func (r *MongoRepo) DeleteTermsByTaxonomy(ctx context.Context, taxonomyKey string) error {
 	_, err := r.terms.DeleteMany(ctx, bson.M{"taxonomy_key": taxonomyKey})
 	return err
@@ -428,8 +490,87 @@ func (r *MongoRepo) GetCommentsByEntry(ctx context.Context, entryID primitive.Ob
 	return comments, nil
 }
 
+func (r *MongoRepo) GetCommentsByEntryPaginated(ctx context.Context, entryID primitive.ObjectID, limit, offset int64) ([]model.CommentWithAuthor, error) {
+	pipeline := mongo.Pipeline{
+		{{Key: "$match", Value: bson.M{"entry_id": entryID}}},
+		{{Key: "$sort", Value: bson.D{{Key: "created_at", Value: 1}}}},
+		{{Key: "$skip", Value: offset}},
+		{{Key: "$limit", Value: limit}},
+		{{Key: "$lookup", Value: bson.D{
+			{Key: "from", Value: "users"},
+			{Key: "let", Value: bson.D{{Key: "authorId", Value: bson.D{{Key: "$toObjectId", Value: "$author_id"}}}}},
+			{Key: "pipeline", Value: mongo.Pipeline{
+				{{Key: "$match", Value: bson.D{{Key: "$expr", Value: bson.D{{Key: "$eq", Value: bson.A{"$_id", "$$authorId"}}}}}}},
+				{{Key: "$project", Value: bson.D{
+					{Key: "_id", Value: 1},
+					{Key: "nickname", Value: 1},
+					{Key: "avatar", Value: 1},
+				}}},
+			}},
+			{Key: "as", Value: "author"},
+		}}},
+		{{Key: "$unwind", Value: bson.D{
+			{Key: "path", Value: "$author"},
+			{Key: "preserveNullAndEmptyArrays", Value: true},
+		}}},
+	}
+
+	cursor, err := r.comments.Aggregate(ctx, pipeline)
+	if err != nil {
+		return nil, err
+	}
+	var comments []model.CommentWithAuthor
+	if err := cursor.All(ctx, &comments); err != nil {
+		return nil, err
+	}
+	return comments, nil
+}
+
+func (r *MongoRepo) CountCommentsByEntry(ctx context.Context, entryID primitive.ObjectID) (int64, error) {
+	return r.comments.CountDocuments(ctx, bson.M{"entry_id": entryID})
+}
+
 func (r *MongoRepo) DeleteComment(ctx context.Context, id primitive.ObjectID) error {
 	_, err := r.comments.DeleteOne(ctx, bson.M{"_id": id})
+	return err
+}
+
+func (r *MongoRepo) IsTermSlugExists(ctx context.Context, taxonomyKey, slug string, excludeID primitive.ObjectID) (bool, error) {
+	filter := bson.M{"taxonomy_key": taxonomyKey, "slug": slug}
+	if !excludeID.IsZero() {
+		filter["_id"] = bson.M{"$ne": excludeID}
+	}
+	count, err := r.terms.CountDocuments(ctx, filter)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (r *MongoRepo) UpdateComment(ctx context.Context, comment *model.Comment) error {
+	comment.UpdatedAt = time.Now()
+	_, err := r.comments.ReplaceOne(ctx, bson.M{"_id": comment.ID}, comment)
+	return err
+}
+
+func (r *MongoRepo) DeleteCommentsByRootID(ctx context.Context, rootID primitive.ObjectID) error {
+	_, err := r.comments.DeleteMany(ctx, bson.M{"root_id": rootID})
+	return err
+}
+
+// --- User Update ---
+func (r *MongoRepo) UpdateUserProfile(ctx context.Context, userID primitive.ObjectID, nickname, avatar string) error {
+	update := bson.M{"$set": bson.M{}}
+	if nickname != "" {
+		update["$set"].(bson.M)["nickname"] = nickname
+	}
+	if avatar != "" {
+		update["$set"].(bson.M)["avatar"] = avatar
+	}
+	if len(update["$set"].(bson.M)) == 0 {
+		return nil
+	}
+	_, err := r.users.UpdateOne(ctx, bson.M{"_id": userID}, update)
 	return err
 }
 
@@ -464,4 +605,24 @@ func (r *MongoRepo) DeleteSession(ctx context.Context, token string) error {
 func (r *MongoRepo) DeleteExpiredSessions(ctx context.Context) error {
 	_, err := r.sessions.DeleteMany(ctx, bson.M{"expires_at": bson.M{"$lt": time.Now()}})
 	return err
+}
+
+// --- OAuth State Operations ---
+func (r *MongoRepo) CreateOAuthState(ctx context.Context, state *model.OAuthState) error {
+	state.CreatedAt = time.Now()
+	result, err := r.oauthStates.InsertOne(ctx, state)
+	if err != nil {
+		return err
+	}
+	state.ID = result.InsertedID.(primitive.ObjectID)
+	return nil
+}
+
+func (r *MongoRepo) GetAndDeleteOAuthState(ctx context.Context, state string) (*model.OAuthState, error) {
+	var oauthState model.OAuthState
+	err := r.oauthStates.FindOneAndDelete(ctx, bson.M{"state": state}).Decode(&oauthState)
+	if err != nil {
+		return nil, err
+	}
+	return &oauthState, nil
 }

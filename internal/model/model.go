@@ -53,6 +53,7 @@ type Schema struct {
 // --- 2. Entry (Dynamic Content) ---
 type BaseMeta struct {
 	Title     string    `bson:"title" json:"title"`
+	Slug      string    `bson:"slug" json:"slug"`
 	Draft     bool      `bson:"draft" json:"draft"`
 	CreatedAt time.Time `bson:"created_at" json:"created_at"`
 	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
@@ -99,14 +100,21 @@ type Comment struct {
 
 	Content   string    `bson:"content" json:"content"`
 	CreatedAt time.Time `bson:"created_at" json:"created_at"`
+	UpdatedAt time.Time `bson:"updated_at" json:"updated_at"`
+}
+
+// CommentWithAuthor 包含作者信息的评论
+type CommentWithAuthor struct {
+	Comment `bson:",inline"`
+	Author  *UserPublic `bson:"author" json:"author"`
 }
 
 // --- 5. User (OAuth2) ---
 type SocialBind struct {
 	Provider       string `bson:"provider" json:"provider"`
-	ProviderUserID string `bson:"provider_user_id" json:"provider_user_id"`
+	ProviderUserID string `bson:"provider_user_id" json:"-"` // 隐藏敏感信息
 	Name           string `bson:"name" json:"name"`
-	Email          string `bson:"email" json:"email"`
+	Email          string `bson:"email" json:"-"` // 隐藏敏感信息
 	Avatar         string `bson:"avatar" json:"avatar"`
 }
 
@@ -115,9 +123,16 @@ type User struct {
 	Role      string             `bson:"role" json:"role"`
 	Nickname  string             `bson:"nickname" json:"nickname"`
 	Avatar    string             `bson:"avatar" json:"avatar"`
-	Email     string             `bson:"email" json:"email"`
+	Email     string             `bson:"email" json:"email,omitempty"` // 仅管理员或本人可见
 	Socials   []SocialBind       `bson:"socials" json:"socials"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+}
+
+// UserPublic 用于公开展示的用户信息
+type UserPublic struct {
+	ID       primitive.ObjectID `json:"id"`
+	Nickname string             `json:"nickname"`
+	Avatar   string             `json:"avatar"`
 }
 
 // --- 6. Session ---
@@ -126,6 +141,14 @@ type Session struct {
 	Token     string             `bson:"token" json:"token"`
 	UserID    primitive.ObjectID `bson:"user_id" json:"user_id"`
 	Role      string             `bson:"role" json:"role"`
+	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
+	ExpiresAt time.Time          `bson:"expires_at" json:"expires_at"`
+}
+
+// --- 7. OAuth State (for CSRF protection) ---
+type OAuthState struct {
+	ID        primitive.ObjectID `bson:"_id,omitempty" json:"id"`
+	State     string             `bson:"state" json:"state"`
 	CreatedAt time.Time          `bson:"created_at" json:"created_at"`
 	ExpiresAt time.Time          `bson:"expires_at" json:"expires_at"`
 }

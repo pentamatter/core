@@ -50,6 +50,17 @@ func (h *TermHandler) Create(c *gin.Context) {
 		return
 	}
 
+	// Check slug uniqueness
+	exists, err := h.mongoRepo.IsTermSlugExists(ctx, req.TaxonomyKey, req.Slug, primitive.NilObjectID)
+	if err != nil {
+		utils.InternalError(c, "failed to check slug")
+		return
+	}
+	if exists {
+		utils.BadRequest(c, "slug already exists in this taxonomy")
+		return
+	}
+
 	term := &model.Term{
 		TaxonomyKey: req.TaxonomyKey,
 		Name:        req.Name,
@@ -147,6 +158,19 @@ func (h *TermHandler) Update(c *gin.Context) {
 		return
 	}
 
+	// Check slug uniqueness (exclude current term)
+	if req.Slug != term.Slug {
+		exists, err := h.mongoRepo.IsTermSlugExists(ctx, term.TaxonomyKey, req.Slug, oid)
+		if err != nil {
+			utils.InternalError(c, "failed to check slug")
+			return
+		}
+		if exists {
+			utils.BadRequest(c, "slug already exists in this taxonomy")
+			return
+		}
+	}
+
 	term.Name = req.Name
 	term.Slug = req.Slug
 	term.Color = req.Color
@@ -182,13 +206,35 @@ func (h *TermHandler) Delete(c *gin.Context) {
 	defer cancel()
 
 	// Check if term exists
-	_, err = h.mongoRepo.GetTermByID(ctx, oid)
+	term, err := h.mongoRepo.GetTermByID(ctx, oid)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			utils.NotFound(c, "term not found")
 			return
 		}
 		utils.InternalError(c, "failed to get term")
+		return
+	}
+
+	// Check if this term has children
+	hasChildren, err := h.mongoRepo.HasChildTerms(ctx, oid)
+	if err != nil {
+		utils.InternalError(c, "failed to check child terms")
+		return
+	}
+	if hasChildren {
+		utils.BadRequest(c, "cannot delete term: has child terms")
+		return
+	}
+
+	// Check if any entries reference this term
+	hasRefs, err := h.mongoRepo.HasTermReferences(ctx, term.TaxonomyKey, oid)
+	if err != nil {
+		utils.InternalError(c, "failed to check term references")
+		return
+	}
+	if hasRefs {
+		utils.BadRequest(c, "cannot delete term: entries are referencing this term")
 		return
 	}
 

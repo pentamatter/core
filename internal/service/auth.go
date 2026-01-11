@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"sync"
 	"time"
 
 	"matter-core/internal/config"
@@ -26,17 +25,12 @@ type AuthService struct {
 	cfg          *config.Config
 	githubConfig *oauth2.Config
 	googleConfig *oauth2.Config
-
-	// CSRF state store with expiration
-	stateMu    sync.RWMutex
-	stateStore map[string]time.Time
 }
 
 func NewAuthService(mongoRepo *repository.MongoRepo, cfg *config.Config) *AuthService {
 	svc := &AuthService{
-		mongoRepo:  mongoRepo,
-		cfg:        cfg,
-		stateStore: make(map[string]time.Time),
+		mongoRepo: mongoRepo,
+		cfg:       cfg,
 	}
 
 	if cfg.GitHubClientID != "" {
@@ -59,57 +53,40 @@ func NewAuthService(mongoRepo *repository.MongoRepo, cfg *config.Config) *AuthSe
 		}
 	}
 
-	// Start cleanup goroutine for expired states
-	go svc.cleanupExpiredStates()
-
 	return svc
 }
 
 // generateState creates a cryptographically secure random state for CSRF protection
-func (s *AuthService) generateState() (string, error) {
+// State is stored in MongoDB for distributed deployment support
+func (s *AuthService) generateState(ctx context.Context) (string, error) {
 	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
 	state := base64.URLEncoding.EncodeToString(b)
 
-	s.stateMu.Lock()
-	s.stateStore[state] = time.Now().Add(10 * time.Minute)
-	s.stateMu.Unlock()
+	oauthState := &model.OAuthState{
+		State:     state,
+		ExpiresAt: time.Now().Add(10 * time.Minute),
+	}
+	if err := s.mongoRepo.CreateOAuthState(ctx, oauthState); err != nil {
+		return "", err
+	}
 
 	return state, nil
 }
 
 // ValidateState checks if the state is valid and removes it from store
-func (s *AuthService) ValidateState(state string) bool {
-	s.stateMu.Lock()
-	defer s.stateMu.Unlock()
-
-	expiry, exists := s.stateStore[state]
-	if !exists {
+func (s *AuthService) ValidateState(ctx context.Context, state string) bool {
+	oauthState, err := s.mongoRepo.GetAndDeleteOAuthState(ctx, state)
+	if err != nil {
 		return false
 	}
-	delete(s.stateStore, state)
-	return time.Now().Before(expiry)
+	return time.Now().Before(oauthState.ExpiresAt)
 }
 
-// cleanupExpiredStates periodically removes expired states
-func (s *AuthService) cleanupExpiredStates() {
-	ticker := time.NewTicker(5 * time.Minute)
-	for range ticker.C {
-		s.stateMu.Lock()
-		now := time.Now()
-		for state, expiry := range s.stateStore {
-			if now.After(expiry) {
-				delete(s.stateStore, state)
-			}
-		}
-		s.stateMu.Unlock()
-	}
-}
-
-func (s *AuthService) GetAuthURL(provider string) (string, error) {
-	state, err := s.generateState()
+func (s *AuthService) GetAuthURL(ctx context.Context, provider string) (string, error) {
+	state, err := s.generateState(ctx)
 	if err != nil {
 		return "", errors.New("failed to generate state")
 	}
@@ -147,27 +124,48 @@ func (s *AuthService) HandleCallback(ctx context.Context, provider, code string)
 		return nil, err
 	}
 
+	// 先通过社交账号查找用户
 	user, err := s.mongoRepo.GetUserBySocial(ctx, socialBind.Provider, socialBind.ProviderUserID)
-	if err != nil {
-		if errors.Is(err, mongo.ErrNoDocuments) {
-			role := string(model.RoleUser)
-			if s.cfg.AdminEmail != "" && socialBind.Email == s.cfg.AdminEmail {
-				role = string(model.RoleAdmin)
-			}
+	if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
+		return nil, err
+	}
 
-			user = &model.User{
-				Role:     role,
-				Nickname: socialBind.Name,
-				Email:    socialBind.Email,
-				Avatar:   socialBind.Avatar,
-				Socials:  []model.SocialBind{socialBind},
-			}
-			if err := s.mongoRepo.CreateUser(ctx, user); err != nil {
-				return nil, err
-			}
-		} else {
+	if user != nil {
+		return user, nil
+	}
+
+	// 社交账号未绑定，尝试通过 email 查找已有用户
+	if socialBind.Email != "" {
+		user, err = s.mongoRepo.GetUserByEmail(ctx, socialBind.Email)
+		if err != nil && !errors.Is(err, mongo.ErrNoDocuments) {
 			return nil, err
 		}
+
+		if user != nil {
+			// 找到同 email 用户，绑定新的社交账号
+			if err := s.mongoRepo.AddUserSocial(ctx, user.ID, socialBind); err != nil {
+				return nil, err
+			}
+			user.Socials = append(user.Socials, socialBind)
+			return user, nil
+		}
+	}
+
+	// 创建新用户
+	role := string(model.RoleUser)
+	if s.cfg.AdminEmail != "" && socialBind.Email == s.cfg.AdminEmail {
+		role = string(model.RoleAdmin)
+	}
+
+	user = &model.User{
+		Role:     role,
+		Nickname: socialBind.Name,
+		Email:    socialBind.Email,
+		Avatar:   socialBind.Avatar,
+		Socials:  []model.SocialBind{socialBind},
+	}
+	if err := s.mongoRepo.CreateUser(ctx, user); err != nil {
+		return nil, err
 	}
 
 	return user, nil
@@ -262,4 +260,8 @@ func (s *AuthService) GetUserByID(ctx context.Context, userID string) (*model.Us
 		return nil, err
 	}
 	return s.mongoRepo.GetUserByID(ctx, oid)
+}
+
+func (s *AuthService) UpdateUser(ctx context.Context, user *model.User) error {
+	return s.mongoRepo.UpdateUser(ctx, user)
 }

@@ -3,11 +3,18 @@ package repository
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 
 	"matter-core/internal/model"
 
 	"github.com/meilisearch/meilisearch-go"
 )
+
+var schemaKeyRegex = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+
+func isValidSchemaKey(key string) bool {
+	return len(key) <= 50 && schemaKeyRegex.MatchString(key)
+}
 
 type MeiliRepo struct {
 	client meilisearch.ServiceManager
@@ -58,7 +65,11 @@ func (r *MeiliRepo) Search(query string, schemaKey string, limit, offset int64) 
 	}
 
 	if schemaKey != "" {
-		// Properly quote the filter value
+		// Sanitize schemaKey to prevent filter injection
+		// Only allow alphanumeric, underscore, and hyphen
+		if !isValidSchemaKey(schemaKey) {
+			return nil, 0, fmt.Errorf("invalid schema_key format")
+		}
 		searchReq.Filter = fmt.Sprintf("schema_key = \"%s\"", schemaKey)
 	}
 

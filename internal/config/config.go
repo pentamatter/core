@@ -22,6 +22,7 @@ type Config struct {
 
 	FrontendURL  string
 	SecureCookie bool
+	CookieDomain string // Cookie 域名，留空则使用当前请求域名
 }
 
 var AppConfig *Config
@@ -43,6 +44,7 @@ func Load() *Config {
 		OAuthRedirectURL:   getEnv("OAUTH_REDIRECT_URL", "http://localhost:8080/api/v1/auth/callback"),
 		FrontendURL:        getEnv("FRONTEND_URL", "http://localhost:3000"),
 		SecureCookie:       getEnv("SECURE_COOKIE", "false") == "true",
+		CookieDomain:       getEnv("COOKIE_DOMAIN", ""), // 例如 ".example.com" 用于跨子域共享
 	}
 	return AppConfig
 }

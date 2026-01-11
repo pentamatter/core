@@ -39,7 +39,9 @@ func NewEntryHandler(
 type CreateEntryRequest struct {
 	SchemaKey  string         `json:"schema_key" binding:"required"`
 	Title      string         `json:"title" binding:"required,max=200"`
+	Slug       string         `json:"slug" binding:"max=200"`
 	Body       string         `json:"body" binding:"max=100000"`
+	Draft      bool           `json:"draft"`
 	Attributes map[string]any `json:"attributes"`
 }
 
@@ -81,6 +83,8 @@ func (h *EntryHandler) Create(c *gin.Context) {
 		AuthorID:      userID.(string),
 		Base: model.BaseMeta{
 			Title: req.Title,
+			Slug:  req.Slug,
+			Draft: req.Draft,
 		},
 		Body:       req.Body,
 		Attributes: req.Attributes,
@@ -91,24 +95,19 @@ func (h *EntryHandler) Create(c *gin.Context) {
 		return
 	}
 
-	// Async sync to Meilisearch
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				// Log panic but don't crash - search sync is non-critical
-			}
-		}()
-		if h.syncSvc != nil {
-			_ = h.syncSvc.SyncEntry(entry)
-		}
-	}()
+	// Async sync to Meilisearch with retry
+	if h.syncSvc != nil {
+		h.syncSvc.SyncEntryAsync(entry)
+	}
 
 	utils.Created(c, entry)
 }
 
 type UpdateEntryRequest struct {
-	Title      string         `json:"title" binding:"max=200"`
-	Body       string         `json:"body" binding:"max=100000"`
+	Title      *string        `json:"title" binding:"omitempty,max=200"`
+	Slug       *string        `json:"slug" binding:"omitempty,max=200"`
+	Body       *string        `json:"body" binding:"omitempty,max=100000"`
+	Draft      *bool          `json:"draft"`
 	Attributes map[string]any `json:"attributes"`
 }
 
@@ -147,11 +146,18 @@ func (h *EntryHandler) Update(c *gin.Context) {
 		return
 	}
 
-	if req.Title != "" {
-		entry.Base.Title = req.Title
+	// Use pointer to distinguish between "not provided" and "set to empty"
+	if req.Title != nil {
+		entry.Base.Title = *req.Title
 	}
-	if req.Body != "" {
-		entry.Body = req.Body
+	if req.Slug != nil {
+		entry.Base.Slug = *req.Slug
+	}
+	if req.Body != nil {
+		entry.Body = *req.Body
+	}
+	if req.Draft != nil {
+		entry.Base.Draft = *req.Draft
 	}
 	if req.Attributes != nil {
 		schema, err := h.mongoRepo.GetSchemaByID(ctx, entry.SchemaID)
@@ -171,16 +177,9 @@ func (h *EntryHandler) Update(c *gin.Context) {
 		return
 	}
 
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				// Log panic but don't crash
-			}
-		}()
-		if h.syncSvc != nil {
-			_ = h.syncSvc.SyncEntry(entry)
-		}
-	}()
+	if h.syncSvc != nil {
+		h.syncSvc.SyncEntryAsync(entry)
+	}
 
 	utils.Success(c, entry)
 }
@@ -218,16 +217,9 @@ func (h *EntryHandler) Delete(c *gin.Context) {
 		return
 	}
 
-	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				// Log panic but don't crash
-			}
-		}()
-		if h.syncSvc != nil {
-			_ = h.syncSvc.DeleteEntry(id)
-		}
-	}()
+	if h.syncSvc != nil {
+		h.syncSvc.DeleteEntryAsync(id)
+	}
 
 	utils.Success(c, nil)
 }
@@ -259,6 +251,7 @@ func (h *EntryHandler) Get(c *gin.Context) {
 func (h *EntryHandler) List(c *gin.Context) {
 	query := c.Query("q")
 	schemaKey := c.Query("schema_key")
+	draftParam := c.Query("draft")
 	limitStr := c.DefaultQuery("limit", "20")
 	offsetStr := c.DefaultQuery("offset", "0")
 
@@ -267,6 +260,26 @@ func (h *EntryHandler) List(c *gin.Context) {
 
 	if limit <= 0 || limit > 100 {
 		limit = 20
+	}
+	if offset < 0 {
+		offset = 0
+	}
+
+	// 处理 draft 过滤
+	var draft *bool
+	userRole, _ := c.Get("user_role")
+	if draftParam != "" {
+		// 只有管理员可以查看草稿
+		if userRole == "admin" {
+			d := draftParam == "true"
+			draft = &d
+		}
+	} else {
+		// 默认只显示已发布的文章（非管理员）
+		if userRole != "admin" {
+			d := false
+			draft = &d
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
@@ -296,18 +309,28 @@ func (h *EntryHandler) List(c *gin.Context) {
 				utils.InternalError(c, "failed to get entries")
 				return
 			}
+			// 过滤草稿（搜索结果需要二次过滤）
+			if draft != nil && !*draft {
+				filtered := make([]model.Entry, 0)
+				for _, e := range entries {
+					if !e.Base.Draft {
+						filtered = append(filtered, e)
+					}
+				}
+				entries = filtered
+			}
 		} else {
 			entries = []model.Entry{}
 		}
 	} else {
 		// Direct MongoDB query
 		var err error
-		entries, err = h.mongoRepo.ListEntries(ctx, schemaKey, limit, offset)
+		entries, err = h.mongoRepo.ListEntries(ctx, schemaKey, draft, limit, offset)
 		if err != nil {
 			utils.InternalError(c, "failed to list entries")
 			return
 		}
-		total, err = h.mongoRepo.CountEntries(ctx, schemaKey)
+		total, err = h.mongoRepo.CountEntries(ctx, schemaKey, draft)
 		if err != nil {
 			utils.InternalError(c, "failed to count entries")
 			return

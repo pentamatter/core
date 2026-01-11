@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -13,6 +14,7 @@ import (
 	"matter-core/internal/repository"
 	"matter-core/internal/service"
 
+	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
 )
 
@@ -59,6 +61,16 @@ func main() {
 	// Setup Gin router
 	r := gin.Default()
 
+	// CORS configuration
+	r.Use(cors.New(cors.Config{
+		AllowOrigins:     []string{cfg.FrontendURL},
+		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
+		ExposeHeaders:    []string{"Content-Length"},
+		AllowCredentials: true,
+		MaxAge:           12 * time.Hour,
+	}))
+
 	// Health check endpoint
 	r.GET("/health", func(c *gin.Context) {
 		c.JSON(200, gin.H{"status": "ok"})
@@ -74,6 +86,7 @@ func main() {
 			auth.GET("/callback/:provider", authHandler.Callback)
 			auth.GET("/session", handler.OptionalAuthMiddleware(sessionStore), authHandler.Session)
 			auth.POST("/signout", authHandler.SignOut)
+			auth.PUT("/profile", handler.AuthMiddleware(sessionStore), authHandler.UpdateProfile)
 		}
 
 		// Schema routes (admin only)
@@ -121,13 +134,23 @@ func main() {
 		{
 			comments.GET("/entry/:entry_id", commentHandler.ListByEntry)
 			comments.POST("", handler.AuthMiddleware(sessionStore), commentHandler.Create)
+			comments.PUT("/:id", handler.AuthMiddleware(sessionStore), commentHandler.Update)
 			comments.DELETE("/:id", handler.AuthMiddleware(sessionStore), commentHandler.Delete)
 		}
 	}
 
+	// Create HTTP server with timeouts
+	srv := &http.Server{
+		Addr:         ":" + cfg.Port,
+		Handler:      r,
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 15 * time.Second,
+		IdleTimeout:  60 * time.Second,
+	}
+
 	// Graceful shutdown
 	go func() {
-		if err := r.Run(":" + cfg.Port); err != nil {
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatalf("Failed to start server: %v", err)
 		}
 	}()
@@ -137,4 +160,14 @@ func main() {
 	<-quit
 
 	log.Println("Shutting down server...")
+
+	// Give outstanding requests 30 seconds to complete
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Printf("Server forced to shutdown: %v", err)
+	}
+
+	log.Println("Server exited")
 }

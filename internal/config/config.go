@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/joho/godotenv"
 )
@@ -24,11 +25,9 @@ type Config struct {
 	GitHubClientSecret string
 	GoogleClientID     string
 	GoogleClientSecret string
-	OAuthRedirectURL   string
 
-	FrontendURL  string
-	SecureCookie bool
-	CookieDomain string // Cookie 域名，留空则使用当前请求域名
+	FrontendURL string // 前端域名，如 https://blog.example.com
+	BackendURL  string // 后端域名，如 https://api.example.com
 }
 
 var AppConfig *Config
@@ -52,12 +51,25 @@ func Load() *Config {
 		GitHubClientSecret: getEnv("GITHUB_CLIENT_SECRET", ""),
 		GoogleClientID:     getEnv("GOOGLE_CLIENT_ID", ""),
 		GoogleClientSecret: getEnv("GOOGLE_CLIENT_SECRET", ""),
-		OAuthRedirectURL:   getEnv("OAUTH_REDIRECT_URL", "http://localhost:8080/api/v1/auth/callback"),
 		FrontendURL:        getEnv("FRONTEND_URL", "http://localhost:3000"),
-		SecureCookie:       getEnv("SECURE_COOKIE", "false") == "true",
-		CookieDomain:       getEnv("COOKIE_DOMAIN", ""), // 例如 ".example.com" 用于跨子域共享
+		BackendURL:         getEnv("BACKEND_URL", "http://localhost:8080"),
 	}
 	return AppConfig
+}
+
+// GetAllowedOrigins 返回 CORS 允许的源
+func (c *Config) GetAllowedOrigins() []string {
+	return []string{c.FrontendURL}
+}
+
+// GetOAuthRedirectURL 返回 OAuth 回调地址
+func (c *Config) GetOAuthRedirectURL() string {
+	return c.BackendURL + "/api/v1/auth/callback"
+}
+
+// IsSecureCookie 根据 BackendURL 判断是否使用 Secure Cookie
+func (c *Config) IsSecureCookie() bool {
+	return strings.HasPrefix(c.BackendURL, "https://")
 }
 
 func getEnv(key, fallback string) string {

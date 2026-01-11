@@ -74,9 +74,9 @@ func main() {
 	// Setup Gin router
 	r := gin.Default()
 
-	// CORS configuration
+	// CORS configuration for cross-origin deployment
 	r.Use(cors.New(cors.Config{
-		AllowOrigins:     []string{cfg.FrontendURL},
+		AllowOrigins:     cfg.GetAllowedOrigins(),
 		AllowMethods:     []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowHeaders:     []string{"Origin", "Content-Type", "Accept", "Authorization"},
 		ExposeHeaders:    []string{"Content-Length"},

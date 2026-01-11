@@ -73,15 +73,15 @@ func (h *AuthHandler) Callback(c *gin.Context) {
 		return
 	}
 
-	// 设置 Cookie
-	c.SetSameSite(http.SameSiteLaxMode)
+	// 设置 Cookie（跨域部署，SameSite=None）
+	c.SetSameSite(http.SameSiteNoneMode)
 	c.SetCookie(
 		SessionCookieName,
 		token,
 		int(SessionDuration.Seconds()),
 		"/",
-		h.cfg.CookieDomain,
-		h.cfg.SecureCookie,
+		"", // 跨域时不设置 domain
+		h.cfg.IsSecureCookie(),
 		true, // HttpOnly
 	)
 
@@ -112,8 +112,8 @@ func (h *AuthHandler) SignOut(c *gin.Context) {
 		h.sessionStore.Delete(c.Request.Context(), token)
 	}
 
-	c.SetSameSite(http.SameSiteLaxMode)
-	c.SetCookie(SessionCookieName, "", -1, "/", h.cfg.CookieDomain, h.cfg.SecureCookie, true)
+	c.SetSameSite(http.SameSiteNoneMode)
+	c.SetCookie(SessionCookieName, "", -1, "/", "", h.cfg.IsSecureCookie(), true)
 
 	utils.Success(c, nil)
 }

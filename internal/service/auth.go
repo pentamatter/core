@@ -38,7 +38,7 @@ func NewAuthService(mongoRepo *repository.MongoRepo, cfg *config.Config) *AuthSe
 			ClientID:     cfg.GitHubClientID,
 			ClientSecret: cfg.GitHubClientSecret,
 			Endpoint:     github.Endpoint,
-			RedirectURL:  cfg.OAuthRedirectURL + "/github",
+			RedirectURL:  cfg.GetOAuthRedirectURL() + "/github",
 			Scopes:       []string{"user:email"},
 		}
 	}
@@ -48,7 +48,7 @@ func NewAuthService(mongoRepo *repository.MongoRepo, cfg *config.Config) *AuthSe
 			ClientID:     cfg.GoogleClientID,
 			ClientSecret: cfg.GoogleClientSecret,
 			Endpoint:     google.Endpoint,
-			RedirectURL:  cfg.OAuthRedirectURL + "/google",
+			RedirectURL:  cfg.GetOAuthRedirectURL() + "/google",
 			Scopes:       []string{"email", "profile"},
 		}
 	}

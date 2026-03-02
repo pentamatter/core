@@ -38,7 +38,7 @@ func (s *SyncService) syncWithRetry(entry *model.Entry, maxRetries int) {
 			return
 		}
 		log.Printf("failed to sync entry %s (attempt %d/%d): %v", entry.ID.Hex(), i+1, maxRetries, err)
-		time.Sleep(time.Duration(i+1) * time.Second) // exponential backoff
+		time.Sleep(time.Duration(1<<uint(i)) * time.Second) // exponential backoff: 1s, 2s, 4s
 	}
 	log.Printf("giving up syncing entry %s after %d attempts", entry.ID.Hex(), maxRetries)
 }

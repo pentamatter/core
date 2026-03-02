@@ -21,9 +21,12 @@ func TestRedisRepo_UserReaction(t *testing.T) {
 	targetID := "entry456"
 
 	t.Run("AddUserReaction", func(t *testing.T) {
-		err := env.RedisRepo.AddUserReaction(ctx, userID, targetType, targetID, "👍")
+		added, err := env.RedisRepo.AddUserReaction(ctx, userID, targetType, targetID, "👍")
 		if err != nil {
 			t.Fatalf("AddUserReaction failed: %v", err)
+		}
+		if !added {
+			t.Error("Expected reaction to be newly added")
 		}
 
 		// Verify it was added
@@ -33,6 +36,15 @@ func TestRedisRepo_UserReaction(t *testing.T) {
 		}
 		if !exists {
 			t.Error("Expected reaction to exist")
+		}
+
+		// Adding again should return false (already exists)
+		added, err = env.RedisRepo.AddUserReaction(ctx, userID, targetType, targetID, "👍")
+		if err != nil {
+			t.Fatalf("AddUserReaction failed: %v", err)
+		}
+		if added {
+			t.Error("Expected reaction to not be newly added (duplicate)")
 		}
 	})
 
@@ -48,12 +60,15 @@ func TestRedisRepo_UserReaction(t *testing.T) {
 
 	t.Run("RemoveUserReaction", func(t *testing.T) {
 		// Add first
-		_ = env.RedisRepo.AddUserReaction(ctx, userID, targetType, targetID, "❤️")
+		_, _ = env.RedisRepo.AddUserReaction(ctx, userID, targetType, targetID, "❤️")
 
 		// Remove
-		err := env.RedisRepo.RemoveUserReaction(ctx, userID, targetType, targetID, "❤️")
+		removed, err := env.RedisRepo.RemoveUserReaction(ctx, userID, targetType, targetID, "❤️")
 		if err != nil {
 			t.Fatalf("RemoveUserReaction failed: %v", err)
+		}
+		if !removed {
+			t.Error("Expected reaction to be removed")
 		}
 
 		// Verify removed
@@ -61,12 +76,21 @@ func TestRedisRepo_UserReaction(t *testing.T) {
 		if exists {
 			t.Error("Expected reaction to be removed")
 		}
+
+		// Removing again should return false (not found)
+		removed, err = env.RedisRepo.RemoveUserReaction(ctx, userID, targetType, targetID, "❤️")
+		if err != nil {
+			t.Fatalf("RemoveUserReaction failed: %v", err)
+		}
+		if removed {
+			t.Error("Expected reaction to not be found (already removed)")
+		}
 	})
 
 	t.Run("GetUserReactionsForTarget", func(t *testing.T) {
 		// Add multiple reactions
-		_ = env.RedisRepo.AddUserReaction(ctx, userID, targetType, targetID, "🎉")
-		_ = env.RedisRepo.AddUserReaction(ctx, userID, targetType, targetID, "🚀")
+		_, _ = env.RedisRepo.AddUserReaction(ctx, userID, targetType, targetID, "🎉")
+		_, _ = env.RedisRepo.AddUserReaction(ctx, userID, targetType, targetID, "🚀")
 
 		emojis, err := env.RedisRepo.GetUserReactionsForTarget(ctx, userID, targetType, targetID)
 		if err != nil {
@@ -80,9 +104,9 @@ func TestRedisRepo_UserReaction(t *testing.T) {
 
 	t.Run("GetUserReactionsForTargets", func(t *testing.T) {
 		// Add reactions to different targets
-		_ = env.RedisRepo.AddUserReaction(ctx, userID, "entry", "target1", "👍")
-		_ = env.RedisRepo.AddUserReaction(ctx, userID, "entry", "target2", "❤️")
-		_ = env.RedisRepo.AddUserReaction(ctx, userID, "comment", "target3", "🎉")
+		_, _ = env.RedisRepo.AddUserReaction(ctx, userID, "entry", "target1", "👍")
+		_, _ = env.RedisRepo.AddUserReaction(ctx, userID, "entry", "target2", "❤️")
+		_, _ = env.RedisRepo.AddUserReaction(ctx, userID, "comment", "target3", "🎉")
 
 		targets := []testutil.ReactionTarget{
 			{Type: "entry", ID: "target1"},

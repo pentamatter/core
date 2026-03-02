@@ -93,24 +93,19 @@ func (s *ReactionService) AddReaction(ctx context.Context, userID, targetType, t
 		return nil, err
 	}
 
-	// Check if reaction already exists (idempotence check)
-	exists, err := s.redisRepo.HasUserReaction(ctx, userID, targetType, targetID, emoji)
+	// Step 1: Atomically add to Redis — SADD returns whether it was newly added
+	added, err := s.redisRepo.AddUserReaction(ctx, userID, targetType, targetID, emoji)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check existing reaction: %w", err)
-	}
-	if exists {
-		return nil, ErrReactionExists
-	}
-
-	// Step 1: Write to Redis first (Requirement 7.1)
-	if err := s.redisRepo.AddUserReaction(ctx, userID, targetType, targetID, emoji); err != nil {
 		return nil, fmt.Errorf("failed to add user reaction to Redis: %w", err)
+	}
+	if !added {
+		return nil, ErrReactionExists
 	}
 
 	// Step 2: Update MongoDB
 	if err := s.mongoRepo.IncrementReaction(ctx, tt, tid, emoji); err != nil {
-		// Rollback Redis on MongoDB failure (Requirement 7.2)
-		if rollbackErr := s.redisRepo.RemoveUserReaction(ctx, userID, targetType, targetID, emoji); rollbackErr != nil {
+		// Rollback Redis on MongoDB failure
+		if _, rollbackErr := s.redisRepo.RemoveUserReaction(ctx, userID, targetType, targetID, emoji); rollbackErr != nil {
 			log.Printf("failed to rollback Redis after MongoDB failure: %v", rollbackErr)
 		}
 		return nil, fmt.Errorf("failed to increment reaction in MongoDB: %w", err)
@@ -140,25 +135,23 @@ func (s *ReactionService) RemoveReaction(ctx context.Context, userID, targetType
 		return nil, err
 	}
 
-	// Check if reaction exists
-	exists, err := s.redisRepo.HasUserReaction(ctx, userID, targetType, targetID, emoji)
+	// Step 1: Atomically remove from Redis — SREM returns whether it was actually removed
+	removed, err := s.redisRepo.RemoveUserReaction(ctx, userID, targetType, targetID, emoji)
 	if err != nil {
-		return nil, fmt.Errorf("failed to check existing reaction: %w", err)
+		return nil, fmt.Errorf("failed to remove user reaction from Redis: %w", err)
 	}
-	if !exists {
+	if !removed {
 		return nil, ErrReactionNotFound
 	}
 
-	// Step 1: Update MongoDB first (Requirement 7.3)
-	// DecrementReaction handles removing the emoji key when count reaches 0 (Requirement 2.3)
+	// Step 2: Update MongoDB
+	// DecrementReaction handles removing the emoji key when count reaches 0
 	if err := s.mongoRepo.DecrementReaction(ctx, tt, tid, emoji); err != nil {
+		// Rollback Redis on MongoDB failure
+		if _, rollbackErr := s.redisRepo.AddUserReaction(ctx, userID, targetType, targetID, emoji); rollbackErr != nil {
+			log.Printf("failed to rollback Redis after MongoDB failure: %v", rollbackErr)
+		}
 		return nil, fmt.Errorf("failed to decrement reaction in MongoDB: %w", err)
-	}
-
-	// Step 2: Delete from Redis
-	if err := s.redisRepo.RemoveUserReaction(ctx, userID, targetType, targetID, emoji); err != nil {
-		// Log error but don't fail the response (Requirement 7.4)
-		log.Printf("failed to remove user reaction from Redis (non-fatal): %v", err)
 	}
 
 	// Return updated reaction response

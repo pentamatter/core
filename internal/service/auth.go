@@ -184,6 +184,10 @@ func (s *AuthService) handleGitHubCallback(ctx context.Context, code string) (mo
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode != 200 {
+		return model.SocialBind{}, fmt.Errorf("github user API returned status %d", resp.StatusCode)
+	}
+
 	var ghUser struct {
 		ID        int    `json:"id"`
 		Login     string `json:"login"`
@@ -198,15 +202,17 @@ func (s *AuthService) handleGitHubCallback(ctx context.Context, code string) (mo
 		emailResp, err := client.Get("https://api.github.com/user/emails")
 		if err == nil {
 			defer emailResp.Body.Close()
-			var emails []struct {
-				Email   string `json:"email"`
-				Primary bool   `json:"primary"`
-			}
-			if json.NewDecoder(emailResp.Body).Decode(&emails) == nil {
-				for _, e := range emails {
-					if e.Primary {
-						ghUser.Email = e.Email
-						break
+			if emailResp.StatusCode == 200 {
+				var emails []struct {
+					Email   string `json:"email"`
+					Primary bool   `json:"primary"`
+				}
+				if json.NewDecoder(emailResp.Body).Decode(&emails) == nil {
+					for _, e := range emails {
+						if e.Primary {
+							ghUser.Email = e.Email
+							break
+						}
 					}
 				}
 			}
@@ -234,6 +240,10 @@ func (s *AuthService) handleGoogleCallback(ctx context.Context, code string) (mo
 		return model.SocialBind{}, err
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return model.SocialBind{}, fmt.Errorf("google userinfo API returned status %d", resp.StatusCode)
+	}
 
 	var googleUser struct {
 		ID      string `json:"id"`

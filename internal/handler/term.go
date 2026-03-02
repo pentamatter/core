@@ -206,7 +206,7 @@ func (h *TermHandler) Delete(c *gin.Context) {
 	defer cancel()
 
 	// Check if term exists
-	term, err := h.mongoRepo.GetTermByID(ctx, oid)
+	_, err = h.mongoRepo.GetTermByID(ctx, oid)
 	if err != nil {
 		if err == mongo.ErrNoDocuments {
 			utils.NotFound(c, "term not found")
@@ -228,7 +228,7 @@ func (h *TermHandler) Delete(c *gin.Context) {
 	}
 
 	// Check if any entries reference this term
-	hasRefs, err := h.mongoRepo.HasTermReferences(ctx, term.TaxonomyKey, oid)
+	hasRefs, err := h.mongoRepo.HasTermReferences(ctx, oid)
 	if err != nil {
 		utils.InternalError(c, "failed to check term references")
 		return

@@ -161,7 +161,7 @@ func TestMongoRepo_Entry(t *testing.T) {
 			})
 		}
 
-		entries, err := env.MongoRepo.ListEntries(ctx, "post", nil, 10, 0)
+		entries, err := env.MongoRepo.ListEntries(ctx, "post", nil, "", 10, 0)
 		if err != nil {
 			t.Fatalf("ListEntries failed: %v", err)
 		}
@@ -172,7 +172,7 @@ func TestMongoRepo_Entry(t *testing.T) {
 	})
 
 	t.Run("CountEntries", func(t *testing.T) {
-		count, err := env.MongoRepo.CountEntries(ctx, "post", nil)
+		count, err := env.MongoRepo.CountEntries(ctx, "post", nil, "")
 		if err != nil {
 			t.Fatalf("CountEntries failed: %v", err)
 		}

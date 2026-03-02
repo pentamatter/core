@@ -21,7 +21,7 @@ func NewSchemaHandler(mongoRepo *repository.MongoRepo) *SchemaHandler {
 }
 
 type CreateSchemaRequest struct {
-	Key    string              `json:"key" binding:"required,max=50,alphanum"`
+	Key    string              `json:"key" binding:"required,max=50"`
 	Name   string              `json:"name" binding:"required,max=100"`
 	Fields []model.FieldSchema `json:"fields" binding:"required"`
 }
@@ -30,6 +30,11 @@ func (h *SchemaHandler) Create(c *gin.Context) {
 	var req CreateSchemaRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequest(c, err.Error())
+		return
+	}
+
+	if !repository.IsValidSchemaKey(req.Key) {
+		utils.BadRequest(c, "invalid key format: only alphanumeric, underscore and hyphen allowed")
 		return
 	}
 
@@ -47,11 +52,10 @@ func (h *SchemaHandler) Create(c *gin.Context) {
 	}
 
 	schema := &model.Schema{
-		Key:       req.Key,
-		Version:   version,
-		Name:      req.Name,
-		Fields:    req.Fields,
-		CreatedAt: time.Now(),
+		Key:     req.Key,
+		Version: version,
+		Name:    req.Name,
+		Fields:  req.Fields,
 	}
 
 	if err := h.mongoRepo.CreateSchema(ctx, schema); err != nil {
@@ -112,7 +116,7 @@ func (h *SchemaHandler) Delete(c *gin.Context) {
 	}
 
 	// Check if any entries are using this schema
-	entryCount, err := h.mongoRepo.CountEntries(ctx, key, nil)
+	entryCount, err := h.mongoRepo.CountEntries(ctx, key, nil, "")
 	if err != nil {
 		utils.InternalError(c, "failed to check entries")
 		return

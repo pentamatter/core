@@ -1,12 +1,15 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
 	"matter-core/internal/config"
 	"matter-core/internal/service"
 	"matter-core/pkg/utils"
+
+	"go.mongodb.org/mongo-driver/mongo"
 
 	"github.com/gin-gonic/gin"
 )
@@ -98,7 +101,11 @@ func (h *AuthHandler) Session(c *gin.Context) {
 
 	user, err := h.authService.GetUserByID(c.Request.Context(), userID.(string))
 	if err != nil {
-		utils.Success(c, gin.H{"user": nil})
+		if errors.Is(err, mongo.ErrNoDocuments) {
+			utils.Success(c, gin.H{"user": nil})
+			return
+		}
+		utils.InternalError(c, "failed to get user")
 		return
 	}
 

@@ -236,14 +236,29 @@ func (r *MongoRepo) GetEntryByID(ctx context.Context, id primitive.ObjectID) (*m
 	return &entry, nil
 }
 
-func (r *MongoRepo) ListEntries(ctx context.Context, schemaKey string, draft *bool, limit, offset int64) ([]model.Entry, error) {
+// buildEntryFilter builds a MongoDB filter for entry queries.
+// authorID: if non-empty, includes the author's drafts alongside published entries (when draft is nil or false).
+func buildEntryFilter(schemaKey string, draft *bool, authorID string) bson.M {
 	filter := bson.M{}
 	if schemaKey != "" {
 		filter["schema_key"] = schemaKey
 	}
 	if draft != nil {
-		filter["base.draft"] = *draft
+		if !*draft && authorID != "" {
+			// Show published entries + this author's drafts
+			filter["$or"] = []bson.M{
+				{"base.draft": false},
+				{"base.draft": true, "author_id": authorID},
+			}
+		} else {
+			filter["base.draft"] = *draft
+		}
 	}
+	return filter
+}
+
+func (r *MongoRepo) ListEntries(ctx context.Context, schemaKey string, draft *bool, authorID string, limit, offset int64) ([]model.Entry, error) {
+	filter := buildEntryFilter(schemaKey, draft, authorID)
 	opts := options.Find().SetLimit(limit).SetSkip(offset).SetSort(bson.D{{Key: "base.created_at", Value: -1}})
 	cursor, err := r.entries.Find(ctx, filter, opts)
 	if err != nil {
@@ -256,14 +271,8 @@ func (r *MongoRepo) ListEntries(ctx context.Context, schemaKey string, draft *bo
 	return entries, nil
 }
 
-func (r *MongoRepo) CountEntries(ctx context.Context, schemaKey string, draft *bool) (int64, error) {
-	filter := bson.M{}
-	if schemaKey != "" {
-		filter["schema_key"] = schemaKey
-	}
-	if draft != nil {
-		filter["base.draft"] = *draft
-	}
+func (r *MongoRepo) CountEntries(ctx context.Context, schemaKey string, draft *bool, authorID string) (int64, error) {
+	filter := buildEntryFilter(schemaKey, draft, authorID)
 	return r.entries.CountDocuments(ctx, filter)
 }
 
@@ -291,11 +300,9 @@ func (r *MongoRepo) GetEntriesByIDs(ctx context.Context, ids []primitive.ObjectI
 	return ordered, nil
 }
 
-func (r *MongoRepo) ListEntriesByTermID(ctx context.Context, termID primitive.ObjectID, draft *bool, limit, offset int64) ([]model.Entry, error) {
-	filter := bson.M{"term_ids": termID}
-	if draft != nil {
-		filter["base.draft"] = *draft
-	}
+func (r *MongoRepo) ListEntriesByTermID(ctx context.Context, termID primitive.ObjectID, draft *bool, authorID string, limit, offset int64) ([]model.Entry, error) {
+	filter := buildEntryFilter("", draft, authorID)
+	filter["term_ids"] = termID
 	opts := options.Find().SetLimit(limit).SetSkip(offset).SetSort(bson.D{{Key: "base.created_at", Value: -1}})
 	cursor, err := r.entries.Find(ctx, filter, opts)
 	if err != nil {
@@ -308,11 +315,9 @@ func (r *MongoRepo) ListEntriesByTermID(ctx context.Context, termID primitive.Ob
 	return entries, nil
 }
 
-func (r *MongoRepo) CountEntriesByTermID(ctx context.Context, termID primitive.ObjectID, draft *bool) (int64, error) {
-	filter := bson.M{"term_ids": termID}
-	if draft != nil {
-		filter["base.draft"] = *draft
-	}
+func (r *MongoRepo) CountEntriesByTermID(ctx context.Context, termID primitive.ObjectID, draft *bool, authorID string) (int64, error) {
+	filter := buildEntryFilter("", draft, authorID)
+	filter["term_ids"] = termID
 	return r.entries.CountDocuments(ctx, filter)
 }
 
@@ -473,17 +478,8 @@ func (r *MongoRepo) HasChildTerms(ctx context.Context, parentID primitive.Object
 	return count > 0, nil
 }
 
-func (r *MongoRepo) HasTermReferences(ctx context.Context, taxonomyKey string, termID primitive.ObjectID) (bool, error) {
-	// Check if any entry's attributes contain this term ID
-	// This searches in attributes where taxonomy fields store term IDs
-	termIDStr := termID.Hex()
-	filter := bson.M{
-		"$or": []bson.M{
-			{"attributes." + taxonomyKey: termIDStr},
-			{"attributes." + taxonomyKey: bson.M{"$in": []string{termIDStr}}},
-		},
-	}
-	count, err := r.entries.CountDocuments(ctx, filter)
+func (r *MongoRepo) HasTermReferences(ctx context.Context, termID primitive.ObjectID) (bool, error) {
+	count, err := r.entries.CountDocuments(ctx, bson.M{"term_ids": termID})
 	if err != nil {
 		return false, err
 	}
@@ -578,6 +574,18 @@ func (r *MongoRepo) IsTermSlugExists(ctx context.Context, taxonomyKey, slug stri
 		filter["_id"] = bson.M{"$ne": excludeID}
 	}
 	count, err := r.terms.CountDocuments(ctx, filter)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (r *MongoRepo) IsEntrySlugExists(ctx context.Context, schemaKey, slug string, excludeID primitive.ObjectID) (bool, error) {
+	filter := bson.M{"schema_key": schemaKey, "base.slug": slug}
+	if !excludeID.IsZero() {
+		filter["_id"] = bson.M{"$ne": excludeID}
+	}
+	count, err := r.entries.CountDocuments(ctx, filter)
 	if err != nil {
 		return false, err
 	}
@@ -739,41 +747,37 @@ func (r *MongoRepo) IncrementReaction(ctx context.Context, targetType model.Targ
 	return err
 }
 
-// DecrementReaction decrements the count for a specific emoji on a target
-// If the count reaches 0, the emoji key is removed from the reactions map
+// DecrementReaction atomically decrements the count for a specific emoji on a target.
+// If the count reaches 0 or below, the emoji key is removed in the same operation.
 func (r *MongoRepo) DecrementReaction(ctx context.Context, targetType model.TargetType, targetID primitive.ObjectID, emoji string) error {
 	filter := bson.M{
 		"target_type": targetType,
 		"target_id":   targetID,
 	}
 
-	// First, decrement the count
+	// Decrement and get the updated document atomically
+	emojiField := "reactions." + emoji
 	update := bson.M{
-		"$inc": bson.M{
-			"reactions." + emoji: -1,
-		},
-		"$set": bson.M{
-			"updated_at": time.Now(),
-		},
+		"$inc": bson.M{emojiField: -1},
+		"$set": bson.M{"updated_at": time.Now()},
 	}
-	_, err := r.reactionSummaries.UpdateOne(ctx, filter, update)
+	opts := options.FindOneAndUpdate().SetReturnDocument(options.After)
+	var result model.ReactionSummary
+	err := r.reactionSummaries.FindOneAndUpdate(ctx, filter, update, opts).Decode(&result)
 	if err != nil {
 		return err
 	}
 
-	// Then, remove the emoji key if count is 0 or less
-	cleanupFilter := bson.M{
-		"target_type":        targetType,
-		"target_id":          targetID,
-		"reactions." + emoji: bson.M{"$lte": 0},
+	// If the count reached 0 or below, remove the emoji key
+	if count, ok := result.Reactions[emoji]; ok && count <= 0 {
+		cleanupUpdate := bson.M{
+			"$unset": bson.M{emojiField: ""},
+		}
+		_, err = r.reactionSummaries.UpdateOne(ctx, filter, cleanupUpdate)
+		return err
 	}
-	cleanupUpdate := bson.M{
-		"$unset": bson.M{
-			"reactions." + emoji: "",
-		},
-	}
-	_, err = r.reactionSummaries.UpdateOne(ctx, cleanupFilter, cleanupUpdate)
-	return err
+
+	return nil
 }
 
 // DeleteReactionSummary deletes the reaction summary for a target

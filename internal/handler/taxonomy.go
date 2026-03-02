@@ -21,7 +21,7 @@ func NewTaxonomyHandler(mongoRepo *repository.MongoRepo) *TaxonomyHandler {
 }
 
 type CreateTaxonomyRequest struct {
-	Key            string `json:"key" binding:"required,max=50,alphanum"`
+	Key            string `json:"key" binding:"required,max=50"`
 	Name           string `json:"name" binding:"required,max=100"`
 	IsHierarchical bool   `json:"is_hierarchical"`
 }
@@ -30,6 +30,11 @@ func (h *TaxonomyHandler) Create(c *gin.Context) {
 	var req CreateTaxonomyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		utils.BadRequest(c, err.Error())
+		return
+	}
+
+	if !repository.IsValidSchemaKey(req.Key) {
+		utils.BadRequest(c, "invalid key format: only alphanumeric, underscore and hyphen allowed")
 		return
 	}
 
